@@ -392,6 +392,14 @@ def train(args: argparse.Namespace):
                 # Mixed Precision Context
                 with torch.amp.autocast(device_type=device.type, enabled=(args.precision != 'fp32'), dtype=dtype):
                     outputs = model(input_ids=input_ids, labels=labels)
+                    # --- Logit finiteness check ---
+                    if hasattr(outputs, 'logits') and not torch.isfinite(outputs.logits).all():
+                        logging.error(f"Infinite/NaN logit detected at Micro-step {global_micro_batch_step}, Opt Step {global_optimizer_step}, Epoch {epoch+1}.")
+                        # Optionally, log more details about the logits or inputs
+                        # logging.error(f"Problematic logits (first example, first token): {outputs.logits[0, 0, :10]}...")
+                        # logging.error(f"Problematic input_ids (first example): {input_ids[0][:20]}...")
+                        if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
+                        raise RuntimeError(f"Infinite/NaN logit detected at Micro-step {global_micro_batch_step}")
                     loss = outputs.loss
 
                 if torch.isnan(loss) or torch.isinf(loss):
