@@ -66,7 +66,11 @@ for k_val in "${K_VALUES[@]}"; do
       "--max_step_checkpoints" "$MAX_CHECKPOINTS" \
       "--wandb_project" "$WANDB_PROJECT" \
       # Uncomment and set if needed: "--wandb_entity" "$WANDB_ENTITY" \
-      "--run_suffix" "$RUN_SUFFIX"
+      "--run_suffix" "$RUN_SUFFIX" \
+      # Add S3 upload arguments
+      "--upload_results_to_s3" \
+      "--s3_results_bucket" "obelisk-simplex" \
+      "--s3_results_prefix" "non-ergodic-arxiv/training_runs"
       # Add --force_cpu if needed, otherwise defaults to GPU if available
     )
     
