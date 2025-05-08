@@ -98,3 +98,60 @@
 *   Run the `tests/test_pretrained_in_context_loss.py` script to get a baseline for Pythia-70M.
 *   Continue monitoring the main training run with the fixes and improved logging.
 *   If training is stable, consider gradually increasing the peak `LEARNING_RATE` in `scripts/run_full_training_plan.sh` towards values more typical for pre-training from scratch (e.g., starting with `1e-4` and observing, potentially going higher if stable, up to `1e-3` which was used for Pythia-70M original pre-training, keeping in mind our smaller batch size might necessitate a somewhat lower LR than their 2M token batches). 
+
+## 2024-05-09 (Continuing NaN Debugging)
+
+**Summary of NaN Issue Journey (leading to current state):**
+
+1.  **Initial Problem:** `scripts/run_full_training_plan.sh` failed due to `train.py` defining `--num_workers` twice.
+2.  **Fix 1:** Commented out duplicate `--num_workers` and `--force_cpu` in `train.py`.
+3.  **Problem 2:** Script failed due to missing S3 upload arguments in `train.py`.
+4.  **Fix 2:** Added S3 arguments (`--upload_results_to_s3`, etc.) to `train.py`.
+5.  **Problem 3 (NaN Loss):** Training crashed early (micro-step 8, optimizer step 1) with NaN loss (using `bf16`), plus deprecated `torch.cuda.amp` warnings.
+6.  **Fix 3 (Update Deprecated Calls):** Updated `GradScaler` and `autocast` to `torch.amp` namespace. This led to `TypeError` due to `device_type` in `GradScaler`.
+7.  **Fix 4 (GradScaler TypeError):** Removed invalid `device_type` from `GradScaler`.
+8.  **Problem 4 (NaN Persists + User Analysis):** NaN loss at micro-step 8 persisted. User suspected `bf16` instability or bad batch from `RandomWindowDataset`. Recommended `fp32` and logit finiteness check.
+9.  **Fix 5 (Precision + Logit Check):** Changed to `fp32` in shell script. Added `outputs.logits` finiteness check in `train.py`.
+10. **Problem 5 (NaN Logits):** Script failed at micro-step 8, caught by new check (`RuntimeError: Infinite/NaN logit detected`), confirming forward pass issue even with `fp32`.
+11. **Debugging Step 6 (User Analysis - Bad Batch Data):** User suspected `RandomWindowDataset` still producing invalid token IDs. Proposed robust patch for `RandomWindowDataset.__getitem__`.
+12. **Fix 6 (Dataset Patch):** Applied patch to `random_window_dataset.py` for better window slicing.
+13. **Testing:** Created Colab snippets for forensic batch check and smoke test. After fixing `NameError: Path`, user confirmed tests passed.
+14. **Problem 7 (NaN Logits Persist):** Full training script *still* failed at micro-step 8 (forward pass NaN logits).
+15. **Debugging Step 7 (GPU vs CPU):** Local `debug_forward_pass.py` on CPU with problematic batch showed **finite** outputs, suggesting GPU-specific issue.
+16. **Debugging Step 8 (In-Script GPU Hooks):** Modified `train.py` with detailed forward hooks and embedding checks for micro-step 8.
+17. **Result 8 (Weights Corrupted):** Revealed embedding weights *themselves* contained NaN/Inf by micro-step 8, *before* the lookup for that step.
+18. **Debugging Step 9 (Backward Pass Corruption):** Pointed to backward pass of micro-steps 1-7 corrupting embedding weights. Decided to use `torch.autograd.detect_anomaly`.
+19. **Fix 10 (Enable detect_anomaly):** Modified `train.py` to enable `detect_anomaly`, removed redundant hooks.
+20. **Unexpected Result:** Training started running without crashing. `detect_anomaly` should report, not fix.
+21. **Problem 9 (Missing Logs):** WandB logs only appearing per epoch, not per optimizer step.
+22. **Debugging Step 10 (Logging Logic):** Realized optimizer step logic (incl. WandB logging) was accidentally removed.
+23. **Fix 11 (Restore Optimizer Logic):** Restored optimizer step, grad clipping, LR scheduling, logging, checkpointing in `train.py`.
+24. **Problem 10 (NaN Loss Returns):** Script failed again at micro-step 8 (`ValueError: NaN or Inf loss detected BEFORE backward()`).
+25. **Debugging Step 11 (Forward Pass NaN):** Confirmed NaN generated during forward pass/loss calculation at micro-step 8 (fp32, finite initial weights). Hypothesized subtle `autocast` issue.
+26. **Fix 12 (Conditional Autocast):** Modified `train.py` to only use `torch.amp.autocast` when precision is *not* `fp32`.
+27. **User Analysis (Data Loader Suspicion):** User again suspected data loader providing out-of-range indices. Proposed definitive local batch check and a more robust `RandomWindowDataset` patch.
+28. **Action (Local Check):** Created and ran `temp_check_batch.py`. Confirmed saved `problematic_batch.pt` **does not contain** out-of-range token IDs.
+29. **Action (Robust Dataset Patch):**
+    * Applied a comprehensive patch to `random_window_dataset.py`. This patch:
+        * Filters short documents upfront in `__init__` (ensuring `length >= sequence_length + 1`).
+        * Adds `self.vocab_size`.
+        * Introduces `_sample_window(self, paper_record)` method which:
+            * Samples a window of `sequence_length + 1` tokens.
+            * Performs hard checks for token ID validity (`>= 0` and `< vocab_size`) on the *entire sampled window* before returning the input part (`window[:-1]`).
+            * Raises `ValueError` if bad tokens are found.
+        * Modifies `__getitem__` to use `_sample_window` with a 10-attempt retry loop, selecting a new random paper on each attempt.
+        * Changes `__len__` to return `len(self.pool)` (number of eligible documents).
+30. **Action (Dataset Smoke Test):**
+    * Created `smoke_test_dataset.py` to validate the patched `RandomWindowDataset`.
+    * The script initializes the dataset, uses a `DataLoader`, and iterates through batches, performing assertions:
+        * `batch.max() < dataset.vocab_size`
+        * `batch.min() >= 0`
+        * `torch.isfinite(batch).all()`
+    * **Result:** The smoke test **passed**, indicating the patched dataset correctly samples and validates token IDs.
+
+**Current Status:**
+The `RandomWindowDataset` has been significantly hardened and a smoke test confirms it's producing valid batches locally. The puzzling NaN at micro-step 8 on Colab (GPU) persists despite `fp32`, valid initial weights, and now a seemingly robust data loader.
+
+**Next Steps:**
+*   Run the full training script (`scripts/run_full_training_plan.sh`) on the Colab GPU environment with the updated `random_window_dataset.py`.
+*   Observe if the NaN issue at micro-step 8 is resolved. 

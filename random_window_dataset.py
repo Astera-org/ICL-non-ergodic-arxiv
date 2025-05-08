@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from typing import List, Optional # Added for type hinting
+from typing import List, Optional, Dict # Added Dict for type hinting record
 
 # Default path for preprocessed data
 DEFAULT_PREPROCESSED_DIR = Path("./preprocessed_arxiv")
@@ -16,7 +16,7 @@ class RandomWindowDataset(Dataset):
                  preprocessed_dir: Path = DEFAULT_PREPROCESSED_DIR,
                  split: str = "train",
                  target_categories: Optional[List[str]] = None,
-                 sequence_length: int = 256): # Add sequence_length argument
+                 sequence_length: int = 256):
         """
         Dataset for loading random token windows from the preprocessed arXiv data.
 
@@ -25,12 +25,13 @@ class RandomWindowDataset(Dataset):
             split (str): The data split to use ("train", "validation", or "test").
             target_categories (Optional[List[str]]): If provided, only sample from papers 
                                                      belonging to these categories.
-            sequence_length (int): The desired length of token sequences to return.
+            sequence_length (int): The desired length of token sequences (input part) to return.
         """
         self.preprocessed_dir = Path(preprocessed_dir)
         self.split = split
         self.target_categories = set(target_categories) if target_categories else None
-        self.sequence_length = sequence_length # Store sequence length
+        self.sequence_length = sequence_length # Store sequence length (this is for the input x, target y will be derived)
+        self.vocab_size = 50_304 # Pythia vocab size
 
         tokens_bin_path = self.preprocessed_dir / "tokens.bin"
         index_jsonl_path = self.preprocessed_dir / "index.jsonl"
@@ -58,94 +59,103 @@ class RandomWindowDataset(Dataset):
 
         paper_ids_for_split = set(all_splits_data[self.split])
         
-        # Filter index to include only papers in the current split and long enough for a window
-        # And further filter by target_categories if provided
-        self.pool = []
+        self.pool: List[Dict] = [] # Explicitly type self.pool
         initial_pool_count = 0
         for record in self.idx:
             if record["paper_id"] in paper_ids_for_split:
-                initial_pool_count += 1 # Count papers in this split before length/category filtering
-                # Filter by target categories first
+                initial_pool_count += 1
                 if self.target_categories and record["cat"] not in self.target_categories:
-                    continue # Skip this paper if its category is not targeted
+                    continue
                 
-                # Then filter by length
-                if record["length"] >= self.sequence_length:
+                # Document must be long enough to sample sequence_length + 1 tokens
+                # (sequence_length for input, 1 for target)
+                if record["length"] >= self.sequence_length + 1:
                     self.pool.append(record)
-                # else:
-                #     if not self.target_categories or record["cat"] in self.target_categories:
-                #         # Only warn if the paper wasn't already filtered out by category
-                #         print(f"Warning: Paper {record['paper_id']} (cat: {record['cat']}) in split {self.split} is too short ({record['length']} tokens) for window size {EFFECTIVE_WINDOW_SIZE}. Skipping.")
         
         pool_info_str = f"split '{self.split}' with {len(self.pool)} suitable papers"
         if self.target_categories:
-             pool_info_str += f" (filtered from {initial_pool_count} total in split for categories {list(sorted(self.target_categories))})" # Sort categories for consistent print
+             pool_info_str += f" (filtered from {initial_pool_count} total in split for categories {list(sorted(self.target_categories))})"
         else:
              pool_info_str += f" (from {initial_pool_count} total in split)"
 
         if not self.pool:
             raise ValueError(
-                f"No suitable papers found for {pool_info_str} with minimum length {self.sequence_length}. "
+                f"No suitable papers found for {pool_info_str} with minimum length {self.sequence_length + 1}. "
                 f"The pool is empty. Check data, preprocessing, and category filters."
             )
         
         print(f"Initialized RandomWindowDataset for {pool_info_str}")
 
     def __len__(self):
-        # New implementation: Fixed samples per epoch
-        # Define an epoch as processing 100 batches worth of samples.
-        # Batch size is typically passed to the DataLoader later.
-        # Here, we implicitly assume a batch size to define epoch length.
-        # Let's use 100 batches * 256 samples/batch (from run script) = 25600 samples
-        return 25600 
+        return len(self.pool) # Number of documents available for sampling
 
-    def __getitem__(self, idx): # idx is not really used due to random sampling
-        # Choose a paper uniformly from the pool for the current split (pool is already filtered)
-        chosen_paper_record = random.choice(self.pool)
-        
-        # Choose a random start position for the window
-        # Ensure there's enough room for a slice of desired length
-        num_tokens = chosen_paper_record["length"]
-        
-        # Fix (inclusive upper bound and handling for short docs)
-        # A window of self.sequence_length requires at least self.sequence_length tokens.
-        # If random.randint(a,b) needs b >= a, then max_start must be num_tokens - self.sequence_length.
-        # If num_tokens = self.sequence_length, then max_start = 0, so start = 0.
-        # This seems correct as we are selecting a window of length self.sequence_length.
-        if num_tokens < self.sequence_length:
-            # This should not happen if the pool is filtered correctly in __init__
-            # where we check record["length"] >= self.sequence_length
+    def _sample_window(self, paper_record: Dict) -> torch.LongTensor:
+        num_tokens = paper_record["length"]
+
+        # This check should ideally be redundant due to filtering in __init__, but good as a safeguard.
+        if num_tokens < self.sequence_length + 1:
+            # This indicates an issue if it's ever reached, as __init__ should filter these.
             raise ValueError(
-                f"Paper {chosen_paper_record['paper_id']} has {num_tokens} tokens, "
-                f"which is less than sequence_length {self.sequence_length}. "
-                "This should have been filtered out during dataset initialization."
+                f"Paper {paper_record['paper_id']} (length {num_tokens}) is too short for "
+                f"sequence_length+1 ({self.sequence_length + 1}). Should have been filtered."
             )
 
-        max_start_index_in_paper = num_tokens - self.sequence_length
-        # Ensure max_start_index_in_paper is not negative, although the check above should prevent it.
-        # If num_tokens == self.sequence_length, max_start_index_in_paper will be 0.
-        # random.randint(0, 0) correctly returns 0.
-        if max_start_index_in_paper < 0: 
-            # This case indicates a logic error if the pool was filtered for num_tokens >= self.sequence_length
-            raise ValueError(
+        # Inclusive end for random.randint, so subtract (sequence_length + 1) then add 1 to length of range,
+        # or simply subtract (sequence_length + 1) from num_tokens for the max starting index.
+        # Max start index in paper for a window of (self.sequence_length + 1) tokens
+        max_start_index_in_paper = num_tokens - (self.sequence_length + 1)
+        
+        if max_start_index_in_paper < 0: # Should be caught by length check above
+             raise ValueError(
                 f"Calculated max_start_index_in_paper ({max_start_index_in_paper}) is negative for paper "
-                f"{chosen_paper_record['paper_id']} with {num_tokens} tokens and sequence_length {self.sequence_length}. "
+                f"{paper_record['paper_id']} with {num_tokens} tokens and sequence_length {self.sequence_length}. "
                 f"This indicates an issue with the length filtering or calculation."
             )
-        
+
         start_index_in_paper = random.randint(0, max_start_index_in_paper)
             
-        # Calculate the start and end offset in the global memory-mapped array
-        global_start_offset = chosen_paper_record["offset"] + start_index_in_paper
-        global_end_offset = global_start_offset + self.sequence_length
+        global_start_offset = paper_record["offset"] + start_index_in_paper
+        # We need sequence_length + 1 tokens to get input (x) and target (y)
+        global_end_offset = global_start_offset + self.sequence_length + 1 
         
-        # Extract tokens
-        tokens_slice = self.mem[global_start_offset:global_end_offset]
+        window_tokens = self.mem[global_start_offset:global_end_offset]
         
-        # Convert to torch tensor of type long (as expected by embedding layers)
-        # Ensure it's a copy, as memmap arrays might not be writable / have other restrictions.
-        # Cast to a type compatible with torch.as_tensor before converting to torch.long
-        return torch.as_tensor(tokens_slice.copy().astype(np.int64), dtype=torch.long)
+        # Hard guard: check all token IDs in the sampled window (input + potential target)
+        # Ensure they are convertible to long and within vocab limits.
+        # np.uint16 can't be negative, so only check upper bound.
+        # Convert to a temporary tensor for easier min/max if needed, or check numpy array directly.
+        if np.any(window_tokens >= self.vocab_size): # Check before converting to tensor
+            # Find problematic tokens for logging
+            problematic_indices = np.where(window_tokens >= self.vocab_size)[0]
+            problematic_values = window_tokens[problematic_indices]
+            print(f"ERROR: Out-of-range token IDs in window from paper {paper_record['paper_id']}. "
+                  f"Indices relative to window start: {problematic_indices.tolist()}. "
+                  f"Values: {problematic_values.tolist()}. Vocab size: {self.vocab_size}. "
+                  f"Window (first 10): {window_tokens[:10].tolist()}")
+            raise ValueError("Out-of-range token IDs detected in _sample_window.")
+            
+        # Return only the input part of the window (length = self.sequence_length)
+        # The target will be derived from this (e.g., input_tokens[1:]) or handled by model
+        input_tokens = torch.as_tensor(window_tokens[:-1].copy().astype(np.int64), dtype=torch.long)
+        return input_tokens
+
+    def __getitem__(self, idx: int): # idx is used to pick from pool for retries, or initial choice
+        # The original idx might not be used if we always random.choice.
+        # For consistency with typical Dataset behavior where idx means something,
+        # let's try to use it, but fall back to random for retries.
+        # However, the user's patch implied random sampling anyway, and original code did random.choice.
+        # Sticking to random.choice for simplicity and robustness against "bad" idx if __len__ changes.
+
+        for attempt in range(10): # Max 10 retries
+            chosen_paper_record = random.choice(self.pool) # Always sample a random paper from the pool
+            try:
+                return self._sample_window(chosen_paper_record)
+            except ValueError as e:
+                print(f"Warning: ValueError in _sample_window (attempt {attempt+1}/10) for paper {chosen_paper_record.get('paper_id', 'unknown')}: {e}. Retrying with a new paper.")
+                if attempt == 9: # Last attempt failed
+                    raise RuntimeError(f"Failed to sample a valid window after 10 attempts. Last error: {e}") from e
+        # Should not be reached if loop raises RuntimeError
+        raise RuntimeError("Exited __getitem__ retry loop unexpectedly.")
 
 if __name__ == '__main__':
     print("Testing RandomWindowDataset...")
