@@ -102,12 +102,12 @@ class RandomWindowDataset(Dataset):
         print(f"Initialized RandomWindowDataset for {pool_info_str}")
 
     def __len__(self):
-        # Return a large number to simulate an epoch over random windows,
-        # or could be len(self.pool) if we want to define an epoch as one pass over each paper once.
-        # The experiment plan mentions "100k steps (~12 effective epochs at 100M tokens)".
-        # This implies we don't iterate through each paper once per epoch.
-        # Let's make it a reasonably large number.
-        return len(self.pool) * 10 # Allow sampling each paper on average 10 times per "epoch"
+        # New implementation: Fixed samples per epoch
+        # Define an epoch as processing 100 batches worth of samples.
+        # Batch size is typically passed to the DataLoader later.
+        # Here, we implicitly assume a batch size to define epoch length.
+        # Let's use 100 batches * 256 samples/batch (from run script) = 25600 samples
+        return 25600 
 
     def __getitem__(self, idx): # idx is not really used due to random sampling
         # Choose a paper uniformly from the pool for the current split (pool is already filtered)
