@@ -267,6 +267,15 @@ def train(args: argparse.Namespace):
     logging.info(f"Using device: {device}")
     model.to(device)
 
+    # Log initial model parameter norm
+    initial_model_param_norm = 0
+    for p in model.parameters():
+        initial_model_param_norm += p.data.norm(2).item() ** 2
+    initial_model_param_norm = initial_model_param_norm ** 0.5
+    logging.info(f"Initial Model Parameter Norm: {initial_model_param_norm:.4f}")
+    if not args.disable_wandb:
+        wandb.summary["initial_model_param_norm"] = initial_model_param_norm
+
     # 4. Optimizer and Scheduler
     logging.info("Setting up optimizer and scheduler...")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -309,6 +318,15 @@ def train(args: argparse.Namespace):
     final_saved_model_path = output_dir_for_run / "final_model" # Define path earlier
 
     try: 
+        # Log model parameter norm before starting the loop
+        model_param_norm_before_loop = 0
+        for p in model.parameters():
+            model_param_norm_before_loop += p.data.norm(2).item() ** 2
+        model_param_norm_before_loop = model_param_norm_before_loop ** 0.5
+        logging.info(f"Model Parameter Norm before training loop: {model_param_norm_before_loop:.4f}")
+        if not args.disable_wandb:
+             wandb.log({ "train/model_param_norm_before_loop": model_param_norm_before_loop, "train/global_step": 0})
+
         for epoch in range(args.epochs if args.epochs > 0 else 1): # Ensure at least one pass if epochs=0 for setup code
             if num_total_training_steps == 0 and args.token_budget == 0 and args.epochs == 0:
                 logging.info("Skipping training loop as epochs and token_budget are 0.")
@@ -376,23 +394,25 @@ def train(args: argparse.Namespace):
                     logging.info(f"Epoch {epoch+1}, Batch {batch_idx+1}/{len(train_dataloader)}, Step {global_step}/{num_total_training_steps}, LR {current_lr:.2e}, Loss: {loss.item():.4f}")
                     logging.info(f"Gradient Norm: Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
                     
-                    # Log model parameter norm
-                    model_param_norm = 0
+                    # Log model parameter norm - this variable is now 'model_param_norm_current_step'
+                    model_param_norm_current_step = 0
                     for p in model.parameters():
-                        model_param_norm += p.data.norm(2).item() ** 2
-                    model_param_norm = model_param_norm ** 0.5
-                    logging.info(f"Model Parameter Norm: {model_param_norm:.4f}")
+                        model_param_norm_current_step += p.data.norm(2).item() ** 2
+                    model_param_norm_current_step = model_param_norm_current_step ** 0.5
+                    logging.info(f"Model Parameter Norm (Step {global_step}): {model_param_norm_current_step:.4f}")
 
                 if not args.disable_wandb and num_total_training_steps > 0:
-                    wandb.log({
+                    wandb_logs = {
                         "train/loss": loss.item(), 
                         "train/learning_rate": current_lr,
                         "train/global_step": global_step,
-                        "epoch": epoch + 1, # Log current epoch for x-axis options
+                        "epoch": epoch + 1,
                         "train/grad_norm_before_clip": total_norm_before_clip,
-                        "train/grad_norm_after_clip": total_norm_after_clip,
-                        "train/model_param_norm": model_param_norm if 'model_param_norm' in locals() else 0 # Handle first step
-                    })
+                        "train/grad_norm_after_clip": total_norm_after_clip
+                    }
+                    if 'model_param_norm_current_step' in locals(): # Check if it's calculated
+                         wandb_logs["train/model_param_norm_current_step"] = model_param_norm_current_step
+                    wandb.log(wandb_logs)
                 
                 if num_total_training_steps > 0: progress_bar.set_postfix({'loss': loss.item()})
 
