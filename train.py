@@ -639,8 +639,8 @@ if __name__ == "__main__":
     parser.add_argument("--precision", type=str, default="bf16", choices=["fp32", "fp16", "bf16"], help="Training precision (bf16 recommended for A100).")
     
     # Dataloader and System
-    parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
-    parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
+    # parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
+    # parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
 
     args = parser.parse_args()
 
