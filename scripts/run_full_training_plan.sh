@@ -15,7 +15,7 @@ LEARNING_RATE=5e-5       # Peak learning rate (Increased due to gradient accum)
 LR_SCHEDULE_TYPE="cosine" # Cosine scheduler
 NUM_WARMUP_STEPS=2000    # Warm-up steps (in optimizer steps)
 WEIGHT_DECAY=0.1         # Weight decay
-GRADIENT_ACCUMULATION_STEPS=8 # Accumulate over 8 micro-batches
+GRADIENT_ACCUMULATION_STEPS=16 # Accumulate over 16 micro-batches (Increased from 8)
 # EPOCHS=12              # Deprecated by token budget / max_steps
 TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
 
