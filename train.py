@@ -331,6 +331,10 @@ def train(args: argparse.Namespace):
                 loss = outputs.loss
                 
                 loss.backward()
+                
+                # Add gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip gradients
+                
                 optimizer.step()
                 if num_total_training_steps > 0: # Only step scheduler if there are training steps
                     lr_scheduler.step()
