@@ -344,7 +344,7 @@ def train(args: argparse.Namespace):
     first_batch_checked = False # Flag for vocab check
     accumulated_loss_for_opt_step = 0.0 # Accumulator for average loss
     last_opt_step_time = time.time() # For timing steps
-    scaler = torch.amp.GradScaler(device_type=device.type, enabled=(args.precision == 'fp16')) # GradScaler for fp16
+    scaler = torch.amp.GradScaler(enabled=(args.precision == 'fp16')) # GradScaler for fp16
     dtype = torch.bfloat16 if args.precision == 'bf16' else torch.float32 # Determine autocast dtype
     final_saved_model_path = output_dir_for_run / "final_model" # Define path earlier
 
