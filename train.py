@@ -421,7 +421,7 @@ def train(args: argparse.Namespace):
                     total_norm_before_clip = total_norm_before_clip ** 0.5
                     
                     # Add gradient clipping
-                    clip_threshold = 1.0 # Max grad norm
+                    clip_threshold = 5.0 # Max grad norm (Increased from 1.0)
                     clip_hit = 1 if total_norm_before_clip > clip_threshold else 0
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold) # Clip accumulated gradients
 
