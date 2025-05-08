@@ -148,6 +148,86 @@ Refer to the script's arguments for more options:
 python train.py --help
 ```
 
+## Running on Google Colab
+
+These instructions guide you through running the full training plan (for SEED=0) on a Google Colab instance, leveraging S3 for data storage and Weights & Biases for logging.
+
+### 1. Setup Colab Runtime
+
+*   Open a new Colab notebook.
+*   Go to `Runtime` -> `Change runtime type`.
+*   Select a GPU accelerator (e.g., T4, A100). The free tier T4 should work, but experiments will run much faster on more powerful GPUs.
+
+### 2. Clone the Repository
+
+Run the following cell in your Colab notebook to clone the project code:
+
+```bash
+!git clone https://github.com/Astera-org/ICL-non-ergodic-arxiv.git
+%cd ICL-non-ergodic-arxiv
+```
+
+### 3. Configure Credentials (Colab Secrets)
+
+Store your sensitive keys securely using Colab's secrets manager:
+
+*   Click the "Key" icon (Secrets) in the left sidebar.
+*   Add the following secrets:
+    *   `WANDB_API_KEY`: Your Weights & Biases API key.
+    *   `AWS_ACCESS_KEY_ID`: Your AWS access key ID.
+    *   `AWS_SECRET_ACCESS_KEY`: Your AWS secret access key.
+*   Optionally, add:
+    *   `AWS_DEFAULT_REGION`: Your preferred AWS region (e.g., `us-west-2`).
+*   Make sure the toggle "Notebook access" is enabled for each secret.
+
+These secrets will be available as environment variables to your Colab runtime, and the Python scripts (`fetch_arxiv.py`, `train.py`) are configured to pick them up automatically for W&B login and S3 access (`boto3`).
+
+### 4. Install Dependencies (using uv)
+
+We use `uv` for faster package installation. Run this cell:
+
+```bash
+!curl -LsSf https://astral.sh/uv/install.sh | sh
+!source /root/.cargo/env
+!uv pip install -r requirements.txt
+```
+*Note: If `source /root/.cargo/env` doesn't work due to shell differences in Colab, you might need to find the uv executable path (e.g., using `!which uv`) and use the full path like `!/root/.cargo/bin/uv pip install ...`*
+
+### 5. Make Scripts Executable
+
+Ensure the shell scripts are executable:
+
+```bash
+!chmod +x scripts/*.sh
+```
+
+### 6. Ensure Full Dataset Availability
+
+The full training plan requires the *full* preprocessed ArXiv dataset.
+
+*   **Prerequisite:** Ensure the *full* dataset has been generated and uploaded to S3 (e.g., by running `scripts/create_full_dataset_s3.sh` on a machine with sufficient resources, or if it already exists from a previous step).
+*   **Run the download/check script:** Execute the following cell in Colab. This script will attempt to download the full dataset from the S3 location configured *within the script* (`s3://obelisk-simplex/non-ergodic-arxiv/preprocessed_arxiv` by default). If it fails (e.g., the dataset isn't there), it will attempt to process it *in Colab*, which is **not recommended** due to time and resource limits.
+
+```bash
+!bash scripts/create_full_dataset_s3.sh
+```
+
+*Verify the script output confirms the dataset was found or downloaded successfully.* If it attempts local processing, stop the cell and ensure the data exists on S3 first.
+
+### 7. Run the Full Training Plan (Seed 0)
+
+Now you can launch the main training script. This script will iterate through K values (1, 2, 4, 8, 11) using seed 0, log results to W&B, and upload the final outputs of each run to S3 (using the bucket/prefix configured in the script's arguments).
+
+```bash
+!bash scripts/run_full_training_plan.sh
+```
+
+### 8. Monitoring
+
+*   **W&B:** Look for the W&B run links printed in the output of the training script. You can follow these links to monitor training progress (loss curves, etc.) in real-time.
+*   **S3:** After each run finishes, check your S3 bucket under the `non-ergodic-arxiv/training_runs/` prefix (or your configured prefix) to find the output directory containing logs, checkpoints, and the final model.
+*   **Colab Timeouts:** Be aware that long-running Colab sessions might time out, especially on free tiers. You may need to restart the script or use a more robust execution environment for very long training plans. Consider Colab Pro or other cloud compute options if needed.
+
 ## Contributing
 (Add contribution guidelines if applicable)
 
