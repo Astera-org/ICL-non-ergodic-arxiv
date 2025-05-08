@@ -233,4 +233,16 @@ Now you can launch the main training script. This script will iterate through K 
 (Add contribution guidelines if applicable)
 
 ## License
-(Specify project license if applicable) 
+(Specify project license if applicable)
+
+### Test Scripts
+
+Several test scripts are available in the `tests/` directory:
+
+*   `test_inspect_raw_data.py`: Loads and prints examples from the raw Hugging Face dataset.
+*   `test_inspect_processed_data.py`: Loads data from `preprocessed_arxiv/`, decodes tokens, and prints samples.
+*   `test_random_window_dataset_sampling.py`: Tests the window sampling and decoding from `RandomWindowDataset`.
+*   `test_category_selection.py`: Tests the deterministic logic for selecting K categories.
+*   `test_pretrained_in_context_loss.py`: Evaluates a pre-trained model (e.g., `EleutherAI/pythia-70m-deduped`) on the ArXiv validation set and plots its in-context learning performance (loss vs. context length). Outputs are saved to `tests/outputs/`.
+
+To run a test script (e.g., `test_inspect_processed_data.py`): 

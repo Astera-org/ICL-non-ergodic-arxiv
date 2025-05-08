@@ -62,6 +62,7 @@ for k_val in "${K_VALUES[@]}"; do
       "--num_warmup_steps" "$NUM_WARMUP_STEPS" \
       "--weight_decay" "$WEIGHT_DECAY" \
       "--token_budget" "$TOKEN_BUDGET" \
+      "--epochs" "1000" \
       "--checkpoint_interval_steps" "$CHECKPOINT_INTERVAL" \
       "--max_step_checkpoints" "$MAX_CHECKPOINTS" \
       "--wandb_project" "$WANDB_PROJECT" \

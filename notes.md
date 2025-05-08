@@ -77,4 +77,24 @@
 
 ## Questions:
 
-*   (Empty for now) 
+*   (Empty for now)
+
+## 2024-05-08
+
+**NaN Debugging & Training Stability:**
+*   Identified and resolved a NaN issue occurring at the start of training. The root cause was traced to the AdamW optimizer's default `eps` value (`1e-8`) being too small, leading to instability on the first/second optimizer step. Changing `eps` to `1e-6` in `train.py` resolved this.
+*   Experimented with `num_warmup_steps` (setting to 0, then restoring to 2000) and `learning_rate` (reduced to `2e-5`) during debugging.
+*   Enhanced logging in `train.py` to include gradient norms (before/after clipping) and model parameter norms at each step for better diagnostics.
+*   Updated W&B logging in `train.py` to log loss and other key metrics every step instead of every `log_interval` steps.
+
+**Training Script Behavior:**
+*   **Overfitting Observed**: User noted a U-shaped validation loss curve, indicating overfitting. The current `train.py` saves the `best_model` based on validation loss, which mitigates this.
+*   **Epochs vs. Token Budget**: Clarified that `TOKEN_BUDGET` should be the primary controller of training duration. Modified `scripts/run_full_training_plan.sh` to explicitly pass `--epochs 1000` to `train.py` to ensure the token budget is met, especially for smaller `K` values where 3 epochs might finish before the token budget is exhausted.
+
+**New Test Script:**
+*   Created `tests/test_pretrained_in_context_loss.py`. This script loads a specified pre-trained Hugging Face model (e.g., `EleutherAI/pythia-70m-deduped`), evaluates it on our ArXiv validation data using the `RandomWindowDataset`, and calculates per-token losses for varying context lengths within each window. It then plots the average loss as a function of context length and saves the plot and raw data. This provides a baseline for in-context learning performance on our dataset.
+
+**Next Steps:**
+*   Run the `tests/test_pretrained_in_context_loss.py` script to get a baseline for Pythia-70M.
+*   Continue monitoring the main training run with the fixes and improved logging.
+*   If training is stable, consider gradually increasing the peak `LEARNING_RATE` in `scripts/run_full_training_plan.sh` towards values more typical for pre-training from scratch (e.g., starting with `1e-4` and observing, potentially going higher if stable, up to `1e-3` which was used for Pythia-70M original pre-training, keeping in mind our smaller batch size might necessitate a somewhat lower LR than their 2M token batches). 
