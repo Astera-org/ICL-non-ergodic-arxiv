@@ -39,35 +39,43 @@ def calculate_in_context_losses(model, tokenizer, dataloader, device, num_sample
             if evaluated_count >= num_samples_to_eval:
                 break
 
-            input_ids_batch = batch.to(device) # Batch of windows
+            input_ids_batch = batch.to(device) # Batch of windows: (batch_size, EFFECTIVE_WINDOW_SIZE)
+
+            # Perform a single forward pass for the entire batch
+            outputs = model(input_ids=input_ids_batch) 
+            # logits shape: (batch_size, EFFECTIVE_WINDOW_SIZE, vocab_size)
+            logits_batch = outputs.logits
 
             for i in range(input_ids_batch.size(0)): # Iterate over samples in batch
                 if evaluated_count >= num_samples_to_eval:
                     break
                 
-                input_ids_single_sample = input_ids_batch[i] # A single window of EFFECTIVE_WINDOW_SIZE
+                # Logits for the current sample: (EFFECTIVE_WINDOW_SIZE, vocab_size)
+                sample_logits = logits_batch[i]
+                # Target tokens for the current sample: (EFFECTIVE_WINDOW_SIZE)
+                sample_input_ids = input_ids_batch[i]
+                
                 sample_losses = []
-
-                # We predict from the 2nd token up to the last one.
-                # Context for predicting token j is tokens 0 to j-1.
+                # We want to calculate loss for predicting token t_j using context t_0...t_{j-1}
+                # The logits at sample_logits[j-1] are for predicting token sample_input_ids[j]
+                # So, loop from the first prediction (predicting token 1) up to the last token.
                 for j in range(1, EFFECTIVE_WINDOW_SIZE):
-                    context_ids = input_ids_single_sample[:j].unsqueeze(0) # Add batch dim
-                    target_token_id = input_ids_single_sample[j]
-
-                    outputs = model(input_ids=context_ids)
-                    logits = outputs.logits[:, -1, :] # Logits for the last token in context
+                    # Logits for predicting token at position j (target_token_id)
+                    # These logits were generated using context up to position j-1.
+                    # So, we take the logits from the (j-1)th position in the sequence.
+                    pred_logits_for_token_j = sample_logits[j-1, :] # Shape: (vocab_size)
+                    target_token_id = sample_input_ids[j]         # Shape: scalar
                     
-                    # Calculate loss for the target_token_id
-                    # Using cross_entropy directly requires logits and target.
-                    # Logits shape: (batch_size=1, vocab_size)
-                    # Target shape: (batch_size=1)
-                    loss = F.cross_entropy(logits, target_token_id.unsqueeze(0))
+                    loss = F.cross_entropy(pred_logits_for_token_j.unsqueeze(0), target_token_id.unsqueeze(0))
                     sample_losses.append(loss.item())
                 
                 all_samples_losses.append(sample_losses)
                 evaluated_count += 1
-                if evaluated_count % 10 == 0:
+                if evaluated_count % (max(1, num_samples_to_eval // 20)) == 0: # Log more frequently
                     logging.info(f"Evaluated {evaluated_count}/{num_samples_to_eval} samples...")
+    
+    if evaluated_count < num_samples_to_eval:
+        logging.warning(f"Only evaluated {evaluated_count} samples, requested {num_samples_to_eval}. Dataset might be too small.")
 
     return all_samples_losses
 
