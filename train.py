@@ -421,8 +421,14 @@ def train(args: argparse.Namespace):
                     first_batch_checked = True
                 # --- End Checksum ---
                 
-                # Mixed Precision Context
-                with torch.amp.autocast(device_type=device.type, enabled=(args.precision != 'fp32'), dtype=dtype):
+                # Mixed Precision Context / Forward Pass
+                if args.precision != 'fp32':
+                    # Use autocast only for fp16/bf16
+                    with torch.amp.autocast(device_type=device.type, dtype=dtype):
+                        outputs = model(input_ids=input_ids, labels=labels)
+                        loss = outputs.loss
+                else:
+                    # Run directly in fp32 without autocast context
                     outputs = model(input_ids=input_ids, labels=labels)
                     loss = outputs.loss
                 
