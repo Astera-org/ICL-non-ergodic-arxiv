@@ -156,15 +156,24 @@ def main():
     # Context length for x-axis (token position being predicted, starting from 2nd token)
     context_positions = np.arange(1, EFFECTIVE_WINDOW_SIZE) # Goes from 1 to EFFECTIVE_WINDOW_SIZE-1
 
+    # Calculate overall mean loss across all positions for the evaluated samples
+    overall_mean_loss = np.mean(avg_loss_per_pos)
+    logging.info(f"Overall mean loss across all context positions: {overall_mean_loss:.4f}")
+
     # Plotting
     plt.figure(figsize=(12, 7))
-    plt.plot(context_positions, avg_loss_per_pos, marker='o', linestyle='-')
-    plt.fill_between(context_positions, avg_loss_per_pos - std_loss_per_pos, avg_loss_per_pos + std_loss_per_pos, alpha=0.2)
+    plt.plot(context_positions, avg_loss_per_pos, marker='o', linestyle='-', label="Loss at context position")
+    plt.fill_between(context_positions, avg_loss_per_pos - std_loss_per_pos, avg_loss_per_pos + std_loss_per_pos, alpha=0.2, label="Std Dev")
+    
+    # Add horizontal line for overall mean loss
+    plt.axhline(overall_mean_loss, color='r', linestyle='--', label=f"Mean Loss over all positions: {overall_mean_loss:.4f}")
+    
     plt.xlabel("Context Length (Number of preceding tokens)")
     plt.ylabel("Average NLL Loss for Next Token")
     plt.title(f"In-Context Learning: Average Loss vs. Context Length\nModel: {args.model_name_or_path}")
     plt.grid(True, which="both", ls="-", alpha=0.5)
     plt.xticks(np.arange(0, EFFECTIVE_WINDOW_SIZE, step=max(1, EFFECTIVE_WINDOW_SIZE//20))) # Adjust tick step
+    plt.legend() # Add legend to show labels
     plt.tight_layout()
     
     plot_path = args.output_dir / f"{run_name}_in_context_loss.png"
@@ -180,6 +189,7 @@ def main():
         "context_positions": context_positions.tolist(),
         "avg_loss_per_position": avg_loss_per_pos.tolist(),
         "std_loss_per_position": std_loss_per_pos.tolist(),
+        "overall_mean_loss": overall_mean_loss, # Add overall mean loss to data
         "all_samples_losses": all_samples_losses # List of lists
     }
     loss_data_path = args.output_dir / f"{run_name}_loss_data.json"
