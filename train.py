@@ -19,6 +19,7 @@ import wandb # Added wandb
 from dotenv import load_dotenv
 import boto3 # Added boto3 again (might be needed for upload func)
 from botocore.exceptions import ClientError # Added for S3 error handling
+from torch.cuda.amp import GradScaler, autocast # For mixed precision
 
 # Add project root to sys.path to allow importing RandomWindowDataset
 PROJECT_ROOT = Path(__file__).parent
@@ -227,12 +228,14 @@ def train(args: argparse.Namespace):
         train_dataset = RandomWindowDataset(
             preprocessed_dir=preprocessed_data_path,
             split="train",
-            target_categories=selected_train_categories
+            target_categories=selected_train_categories,
+            sequence_length=args.sequence_length # Pass sequence length
         )
         val_dataset = RandomWindowDataset(
             preprocessed_dir=preprocessed_data_path,
             split="validation",
-            target_categories=selected_train_categories # Use same categories for validation
+            target_categories=selected_train_categories, # Use same categories for validation
+            sequence_length=args.sequence_length # Pass sequence length
         )
     except FileNotFoundError:
         logging.error(f"Preprocessed data not found in {preprocessed_data_path}. Please run fetch_arxiv.py first.")
@@ -290,17 +293,17 @@ def train(args: argparse.Namespace):
 
     # 4. Optimizer and Scheduler
     logging.info("Setting up optimizer and scheduler...")
-    # Use default AdamW betas = (0.9, 0.999), set eps=1e-6 for stability based on previous runs
-    # Use requested beta2 = 0.98
+    # Use requested beta2 = 0.95 and eps = 1e-8
     optimizer = torch.optim.AdamW(model.parameters(), 
                                 lr=args.learning_rate, 
                                 weight_decay=args.weight_decay, 
-                                eps=1e-6, 
-                                betas=(0.9, 0.98)) 
+                                eps=1e-8, # Reverted to default/requested
+                                betas=(0.9, 0.95)) # Use requested betas
     
     # Determine total training steps (optimizer steps)
     if args.token_budget > 0:
-        tokens_per_optimizer_step = args.batch_size * EFFECTIVE_WINDOW_SIZE * args.gradient_accumulation_steps
+        # Note: sequence_length replaces EFFECTIVE_WINDOW_SIZE
+        tokens_per_optimizer_step = args.batch_size * args.sequence_length * args.gradient_accumulation_steps
         if tokens_per_optimizer_step == 0: 
             logging.error("Cannot calculate steps: tokens_per_optimizer_step is zero.")
             if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
@@ -341,6 +344,8 @@ def train(args: argparse.Namespace):
     first_batch_checked = False # Flag for vocab check
     accumulated_loss_for_opt_step = 0.0 # Accumulator for average loss
     last_opt_step_time = time.time() # For timing steps
+    scaler = GradScaler(enabled=(args.precision == 'fp16')) # GradScaler for fp16
+    dtype = torch.bfloat16 if args.precision == 'bf16' else torch.float32 # Determine autocast dtype
     final_saved_model_path = output_dir_for_run / "final_model" # Define path earlier
 
     try: 
@@ -384,8 +389,10 @@ def train(args: argparse.Namespace):
                     first_batch_checked = True
                 # --- End Checksum ---
                 
-                outputs = model(input_ids=input_ids, labels=labels)
-                loss = outputs.loss
+                # Mixed Precision Context
+                with autocast(enabled=(args.precision != 'fp32'), dtype=dtype):
+                    outputs = model(input_ids=input_ids, labels=labels)
+                    loss = outputs.loss
 
                 if torch.isnan(loss) or torch.isinf(loss):
                     logging.error(f"NaN or Inf loss detected at Micro-step {global_micro_batch_step}, Opt Step {global_optimizer_step}, Epoch {epoch+1}. Loss: {loss.item()}")
@@ -397,7 +404,9 @@ def train(args: argparse.Namespace):
 
                 # Normalize loss for accumulation
                 normalized_loss = loss / args.gradient_accumulation_steps
-                normalized_loss.backward()
+                
+                # Scale loss and call backward using GradScaler for fp16, normal backward for bf16/fp32
+                scaler.scale(normalized_loss).backward()
                 
                 accumulated_loss_for_opt_step += loss.item() # Accumulate original loss
                 
@@ -420,8 +429,9 @@ def train(args: argparse.Namespace):
                             total_norm_before_clip += param_norm.item() ** 2
                     total_norm_before_clip = total_norm_before_clip ** 0.5
                     
-                    # Add gradient clipping
-                    clip_threshold = 5.0 # Max grad norm (Increased from 1.0)
+                    # Add gradient clipping (Unscale grads first for fp16)
+                    scaler.unscale_(optimizer) # Unscale gradients before clipping for fp16
+                    clip_threshold = args.max_grad_norm # Use arg for max_grad_norm
                     clip_hit = 1 if total_norm_before_clip > clip_threshold else 0
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold) # Clip accumulated gradients
 
@@ -432,10 +442,9 @@ def train(args: argparse.Namespace):
                             total_norm_after_clip += param_norm.item() ** 2
                     total_norm_after_clip = total_norm_after_clip ** 0.5
                     
-                    optimizer.step()
-                    if num_total_training_steps > 0: # Only step scheduler if there are training steps
-                        lr_scheduler.step()
-                    optimizer.zero_grad()
+                    # Optimizer step (using scaler for fp16)
+                    scaler.step(optimizer)
+                    scaler.update() # Update scaler for next iteration (for fp16)
                     
                     current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
                     
@@ -614,6 +623,27 @@ if __name__ == "__main__":
                         help="S3 bucket name for uploading training results.")
     parser.add_argument("--s3_results_prefix", type=str, default="training_runs",
                         help="Prefix (folder path) within the S3 results bucket. Run name will be appended.")
+
+    # --- Training Configuration --- 
+    parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for training samples.")
+    parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.")
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
+    parser.add_argument("--adam_beta1", type=float, default=0.9, help="AdamW beta1 parameter.")
+    parser.add_argument("--adam_beta2", type=float, default=0.95, help="AdamW beta2 parameter.")
+    parser.add_argument("--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon parameter.")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum norm for gradient clipping.")
+    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).")
+    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.")
+    
+    # --- Precision --- 
+    parser.add_argument("--precision", type=str, default="bf16", choices=["fp32", "fp16", "bf16"], help="Training precision (bf16 recommended for A100).")
+    
+    # Dataloader and System
+    parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
+    parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
 
     args = parser.parse_args()
 

@@ -8,39 +8,29 @@ from typing import List, Optional # Added for type hinting
 
 # Default path for preprocessed data
 DEFAULT_PREPROCESSED_DIR = Path("./preprocessed_arxiv")
-WINDOW_SIZE = 100 # As per EXPERIMENT_PLAN.md, section 1.4 (100-token slice)
-# Your spec for RandomWindowDataset read path used 101, 
-# but EXPERIMENT_PLAN.md consistently mentions 100-token windows.
-# Let's stick to 100 for the actual data slice, and it means we need 100 tokens for features + 1 for target.
-# So, a slice of 101 from memmap is correct if we want to predict the 101st token based on the first 100.
-# The eval protocol mentions "cross entropy on tokens 1...99 (BOS ignored)".
-# If BOS is token 0, then we predict tokens 1 to 99. This means we need 100 tokens total (0 to 99).
-# Let's assume the 100-token slice is [t_0, t_1, ..., t_99].
-# If BOS is added, context is BOS + t_0...t_98, predict t_1...t_99.
-# The spec "Context length 128 (BOS + 100 + pad)" suggests 100 tokens from the paper.
-# Let's go with a slice of 100 tokens from the paper, and the model will handle BOS.
-# The RandomWindowDataset spec mentions `tokens = self.mem[row["offset"] + start : row["offset"] + start + 101]`
-# This slice is of length 101. This is good for typical LM training (input_ids = tokens[:-1], labels = tokens[1:])
-
-EFFECTIVE_WINDOW_SIZE = 101 # Slice 101 tokens to get 100 for input and 100 for shifted labels
+# Remove global constant
+# EFFECTIVE_WINDOW_SIZE = 101 
 
 class RandomWindowDataset(Dataset):
     def __init__(self,
                  preprocessed_dir: Path = DEFAULT_PREPROCESSED_DIR,
                  split: str = "train",
-                 target_categories: Optional[List[str]] = None):
+                 target_categories: Optional[List[str]] = None,
+                 sequence_length: int = 256): # Add sequence_length argument
         """
-        Dataset for loading random 100-token windows from the preprocessed arXiv data.
+        Dataset for loading random token windows from the preprocessed arXiv data.
 
         Args:
             preprocessed_dir (Path): Directory containing tokens.bin, index.jsonl, splits.json.
             split (str): The data split to use ("train", "validation", or "test").
             target_categories (Optional[List[str]]): If provided, only sample from papers 
                                                      belonging to these categories.
+            sequence_length (int): The desired length of token sequences to return.
         """
         self.preprocessed_dir = Path(preprocessed_dir)
         self.split = split
         self.target_categories = set(target_categories) if target_categories else None
+        self.sequence_length = sequence_length # Store sequence length
 
         tokens_bin_path = self.preprocessed_dir / "tokens.bin"
         index_jsonl_path = self.preprocessed_dir / "index.jsonl"
@@ -80,7 +70,7 @@ class RandomWindowDataset(Dataset):
                     continue # Skip this paper if its category is not targeted
                 
                 # Then filter by length
-                if record["length"] >= EFFECTIVE_WINDOW_SIZE:
+                if record["length"] >= self.sequence_length:
                     self.pool.append(record)
                 # else:
                 #     if not self.target_categories or record["cat"] in self.target_categories:
@@ -95,7 +85,7 @@ class RandomWindowDataset(Dataset):
 
         if not self.pool:
             raise ValueError(
-                f"No suitable papers found for {pool_info_str} with minimum length {EFFECTIVE_WINDOW_SIZE}. "
+                f"No suitable papers found for {pool_info_str} with minimum length {self.sequence_length}. "
                 f"The pool is empty. Check data, preprocessing, and category filters."
             )
         
@@ -114,18 +104,17 @@ class RandomWindowDataset(Dataset):
         chosen_paper_record = random.choice(self.pool)
         
         # Choose a random start position for the window
-        # Ensure there's enough room for a 101-token slice
-        # randint is inclusive for both ends, so max_start_index ensures the slice ends within the paper.
-        if chosen_paper_record["length"] <= EFFECTIVE_WINDOW_SIZE:
+        # Ensure there's enough room for a slice of desired length
+        if chosen_paper_record["length"] <= self.sequence_length:
              # This case should ideally be rare if pool is filtered correctly, but as a safeguard:
             start_index_in_paper = 0
         else:
-            max_start_index_in_paper = chosen_paper_record["length"] - EFFECTIVE_WINDOW_SIZE
+            max_start_index_in_paper = chosen_paper_record["length"] - self.sequence_length
             start_index_in_paper = random.randint(0, max_start_index_in_paper)
             
         # Calculate the start and end offset in the global memory-mapped array
         global_start_offset = chosen_paper_record["offset"] + start_index_in_paper
-        global_end_offset = global_start_offset + EFFECTIVE_WINDOW_SIZE
+        global_end_offset = global_start_offset + self.sequence_length
         
         # Extract tokens
         tokens_slice = self.mem[global_start_offset:global_end_offset]
@@ -184,7 +173,7 @@ if __name__ == '__main__':
             sample_train_all = train_dataset_all[0]
             print(f"Sample from train dataset (all cats): {sample_train_all.shape}, {sample_train_all.dtype}")
             # print(sample_train_all)
-            assert sample_train_all.shape == (EFFECTIVE_WINDOW_SIZE,)
+            assert sample_train_all.shape == (train_dataset_all.sequence_length,)
             assert sample_train_all.dtype == torch.long
         else:
             print("Train dataset (all cats) is empty or could not be loaded.")
@@ -203,7 +192,7 @@ if __name__ == '__main__':
                 sample_train_filtered = train_dataset_filtered[0]
                 print(f"Sample from train dataset (filtered): {sample_train_filtered.shape}, {sample_train_filtered.dtype}")
                 # print(sample_train_filtered)
-                assert sample_train_filtered.shape == (EFFECTIVE_WINDOW_SIZE,)
+                assert sample_train_filtered.shape == (train_dataset_filtered.sequence_length,)
                 assert sample_train_filtered.dtype == torch.long
                 # Check if sampled paper's category is correct
                 # Need to find the record corresponding to the sampled window, which is tricky without more info
@@ -228,7 +217,7 @@ if __name__ == '__main__':
                     print(f"Number of items in val dataset: {len(val_dataset)}")
                     sample_val = val_dataset[0]
                     print(f"Sample from val dataset: {sample_val.shape}, {sample_val.dtype}")
-                    assert sample_val.shape == (EFFECTIVE_WINDOW_SIZE,)
+                    assert sample_val.shape == (val_dataset.sequence_length,)
                     assert sample_val.dtype == torch.long
                 else:
                     print("Validation dataset is empty or could not be loaded.")
