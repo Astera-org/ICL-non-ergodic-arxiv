@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional # Added Optional here
 
 import torch
+import torch.optim # Import torch.optim
 import numpy as np
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, AdamW, get_scheduler # Added AutoConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, get_scheduler # Added AutoConfig
 from tqdm import tqdm # For progress bars
 import wandb # Added wandb
 from dotenv import load_dotenv
@@ -265,7 +266,7 @@ def train(args: argparse.Namespace):
 
     # 4. Optimizer and Scheduler
     logging.info("Setting up optimizer and scheduler...")
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     
     # Determine total training steps
     if args.token_budget > 0:
