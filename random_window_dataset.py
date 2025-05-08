@@ -105,12 +105,35 @@ class RandomWindowDataset(Dataset):
         
         # Choose a random start position for the window
         # Ensure there's enough room for a slice of desired length
-        if chosen_paper_record["length"] <= self.sequence_length:
-             # This case should ideally be rare if pool is filtered correctly, but as a safeguard:
-            start_index_in_paper = 0
-        else:
-            max_start_index_in_paper = chosen_paper_record["length"] - self.sequence_length
-            start_index_in_paper = random.randint(0, max_start_index_in_paper)
+        num_tokens = chosen_paper_record["length"]
+        
+        # Fix (inclusive upper bound and handling for short docs)
+        # A window of self.sequence_length requires at least self.sequence_length tokens.
+        # If random.randint(a,b) needs b >= a, then max_start must be num_tokens - self.sequence_length.
+        # If num_tokens = self.sequence_length, then max_start = 0, so start = 0.
+        # This seems correct as we are selecting a window of length self.sequence_length.
+        if num_tokens < self.sequence_length:
+            # This should not happen if the pool is filtered correctly in __init__
+            # where we check record["length"] >= self.sequence_length
+            raise ValueError(
+                f"Paper {chosen_paper_record['paper_id']} has {num_tokens} tokens, "
+                f"which is less than sequence_length {self.sequence_length}. "
+                "This should have been filtered out during dataset initialization."
+            )
+
+        max_start_index_in_paper = num_tokens - self.sequence_length
+        # Ensure max_start_index_in_paper is not negative, although the check above should prevent it.
+        # If num_tokens == self.sequence_length, max_start_index_in_paper will be 0.
+        # random.randint(0, 0) correctly returns 0.
+        if max_start_index_in_paper < 0: 
+            # This case indicates a logic error if the pool was filtered for num_tokens >= self.sequence_length
+            raise ValueError(
+                f"Calculated max_start_index_in_paper ({max_start_index_in_paper}) is negative for paper "
+                f"{chosen_paper_record['paper_id']} with {num_tokens} tokens and sequence_length {self.sequence_length}. "
+                f"This indicates an issue with the length filtering or calculation."
+            )
+        
+        start_index_in_paper = random.randint(0, max_start_index_in_paper)
             
         # Calculate the start and end offset in the global memory-mapped array
         global_start_offset = chosen_paper_record["offset"] + start_index_in_paper
