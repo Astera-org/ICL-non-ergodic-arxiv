@@ -278,7 +278,7 @@ def train(args: argparse.Namespace):
 
     # 4. Optimizer and Scheduler
     logging.info("Setting up optimizer and scheduler...")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, eps=1e-6)
     
     # Determine total training steps
     if args.token_budget > 0:
