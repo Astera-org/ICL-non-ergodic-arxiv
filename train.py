@@ -200,6 +200,9 @@ def train(args: argparse.Namespace):
     np.random.seed(args.seed)
     random.seed(args.seed) # For python's random ops (like category selection initial shuffle)
 
+    # Enable anomaly detection for debugging NaNs
+    torch.autograd.set_detect_anomaly(True)
+
     # 1. Select K categories
     selected_train_categories = select_categories(ALL_CATEGORIES, k=args.k, seed=args.seed)
     logging.info(f"Selected {args.k} categories for training (seed {args.seed}): {selected_train_categories}")
@@ -329,11 +332,35 @@ def train(args: argparse.Namespace):
                 
                 outputs = model(input_ids=input_ids, labels=labels)
                 loss = outputs.loss
-                
+
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logging.error(f"NaN or Inf loss detected at Step {global_step}, Epoch {epoch+1}, Batch {batch_idx+1}. Loss: {loss.item()}")
+                    # Optionally, log the input_ids that caused the NaN/Inf loss
+                    # logging.error(f"Problematic input_ids (first example in batch): {input_ids[0][:20]}...") 
+                    # Consider breaking or handling appropriately
+                    if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
+                    raise ValueError(f"NaN or Inf loss detected at Step {global_step}")
+
                 loss.backward()
+                
+                # Log grad norm before clipping
+                total_norm_before_clip = 0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm_before_clip += param_norm.item() ** 2
+                total_norm_before_clip = total_norm_before_clip ** 0.5
                 
                 # Add gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip gradients
+
+                # Log grad norm after clipping
+                total_norm_after_clip = 0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm_after_clip += param_norm.item() ** 2
+                total_norm_after_clip = total_norm_after_clip ** 0.5
                 
                 optimizer.step()
                 if num_total_training_steps > 0: # Only step scheduler if there are training steps
@@ -347,13 +374,24 @@ def train(args: argparse.Namespace):
                 current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
                 if global_step % args.log_interval == 0 and num_total_training_steps > 0:
                     logging.info(f"Epoch {epoch+1}, Batch {batch_idx+1}/{len(train_dataloader)}, Step {global_step}/{num_total_training_steps}, LR {current_lr:.2e}, Loss: {loss.item():.4f}")
-                
+                    logging.info(f"Gradient Norm: Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
+                    
+                    # Log model parameter norm
+                    model_param_norm = 0
+                    for p in model.parameters():
+                        model_param_norm += p.data.norm(2).item() ** 2
+                    model_param_norm = model_param_norm ** 0.5
+                    logging.info(f"Model Parameter Norm: {model_param_norm:.4f}")
+
                 if not args.disable_wandb and num_total_training_steps > 0:
                     wandb.log({
                         "train/loss": loss.item(), 
                         "train/learning_rate": current_lr,
                         "train/global_step": global_step,
-                        "epoch": epoch + 1 # Log current epoch for x-axis options
+                        "epoch": epoch + 1, # Log current epoch for x-axis options
+                        "train/grad_norm_before_clip": total_norm_before_clip,
+                        "train/grad_norm_after_clip": total_norm_after_clip,
+                        "train/model_param_norm": model_param_norm if 'model_param_norm' in locals() else 0 # Handle first step
                     })
                 
                 if num_total_training_steps > 0: progress_bar.set_postfix({'loss': loss.item()})
