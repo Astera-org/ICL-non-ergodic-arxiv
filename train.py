@@ -390,29 +390,36 @@ def train(args: argparse.Namespace):
                 global_step += 1
 
                 current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
-                if global_step % args.log_interval == 0 and num_total_training_steps > 0:
-                    logging.info(f"Epoch {epoch+1}, Batch {batch_idx+1}/{len(train_dataloader)}, Step {global_step}/{num_total_training_steps}, LR {current_lr:.2e}, Loss: {loss.item():.4f}")
-                    logging.info(f"Gradient Norm: Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
-                    
-                    # Log model parameter norm - this variable is now 'model_param_norm_current_step'
+                
+                # W&B logging every step
+                if not args.disable_wandb and num_total_training_steps > 0:
+                    # Calculate current model parameter norm for logging
+                    # This was previously inside the log_interval block
                     model_param_norm_current_step = 0
                     for p in model.parameters():
                         model_param_norm_current_step += p.data.norm(2).item() ** 2
                     model_param_norm_current_step = model_param_norm_current_step ** 0.5
-                    logging.info(f"Model Parameter Norm (Step {global_step}): {model_param_norm_current_step:.4f}")
-
-                if not args.disable_wandb and num_total_training_steps > 0:
+                    
                     wandb_logs = {
                         "train/loss": loss.item(), 
                         "train/learning_rate": current_lr,
                         "train/global_step": global_step,
                         "epoch": epoch + 1,
                         "train/grad_norm_before_clip": total_norm_before_clip,
-                        "train/grad_norm_after_clip": total_norm_after_clip
+                        "train/grad_norm_after_clip": total_norm_after_clip,
+                        "train/model_param_norm_current_step": model_param_norm_current_step
                     }
-                    if 'model_param_norm_current_step' in locals(): # Check if it's calculated
-                         wandb_logs["train/model_param_norm_current_step"] = model_param_norm_current_step
                     wandb.log(wandb_logs)
+
+                # Console logging at log_interval
+                if global_step % args.log_interval == 0 and num_total_training_steps > 0:
+                    logging.info(f"Epoch {epoch+1}, Batch {batch_idx+1}/{len(train_dataloader)}, Step {global_step}/{num_total_training_steps}, LR {current_lr:.2e}, Loss: {loss.item():.4f}")
+                    logging.info(f"Gradient Norm: Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
+                    # model_param_norm_current_step is already calculated above for W&B if not args.disable_wandb
+                    # If W&B is disabled, we might need to calculate it here or ensure it's available
+                    # For simplicity, let's assume if console logging is on, W&B might also be, or it's okay if this specific console log for param norm is missing when W&B is off
+                    if 'model_param_norm_current_step' in locals(): # Check if available from W&B logic
+                         logging.info(f"Model Parameter Norm (Step {global_step}): {model_param_norm_current_step:.4f}")
                 
                 if num_total_training_steps > 0: progress_bar.set_postfix({'loss': loss.item()})
 
