@@ -504,6 +504,49 @@ def train(args: argparse.Namespace):
                             handle.remove()
                         logging.info("Removed all DEBUG hooks.")
                     
+                    # --- Granular Embedding Debugging (NEW CODE) ---
+                    logging.info("--- Starting Granular Embedding Debugging --- ")
+                    try:
+                        embedding_layer = model.gpt_neox.embed_in
+                        embedding_weights = embedding_layer.weight
+                        logging.info(f"Checking embedding weights ({embedding_weights.shape})...")
+                        is_weights_finite = torch.isfinite(embedding_weights).all().item()
+                        logging.info(f"Embedding weights all finite: {is_weights_finite}")
+                        if not is_weights_finite: logging.error("EMBEDDING DEBUG: Weights contain NaN/Inf BEFORE lookup!")
+                        
+                        logging.info("Performing direct embedding lookup for the problematic batch...")
+                        with torch.no_grad(): embedded_output = embedding_layer(input_ids)
+                        is_embedded_output_finite = torch.isfinite(embedded_output).all().item()
+                        logging.info(f"Direct batch embedding lookup output finite: {is_embedded_output_finite}")
+
+                        if not is_embedded_output_finite:
+                            logging.error("EMBEDDING DEBUG: Direct batch embedding lookup resulted in NaN/Inf! Checking individual tokens...")
+                            found_bad_token = False
+                            for b_idx in range(input_ids.shape[0]):
+                                if found_bad_token: break # Stop after finding the first one per batch
+                                for s_idx in range(input_ids.shape[1]):
+                                    token_id = input_ids[b_idx, s_idx].item()
+                                    single_token_id_tensor = input_ids[b_idx, s_idx].unsqueeze(0)
+                                    if single_token_id_tensor.dim() == 0: single_token_id_tensor = single_token_id_tensor.unsqueeze(0)
+                                    
+                                    with torch.no_grad(): single_embedding = embedding_layer(single_token_id_tensor)
+                                    
+                                    if not torch.isfinite(single_embedding).all():
+                                        logging.error(f"  EMBEDDING DEBUG: NON-FINITE embedding FOUND for Token ID: {token_id} at batch_idx={b_idx}, seq_idx={s_idx}")
+                                        # logging.error(f"    Input token ID tensor: {single_token_id_tensor}")
+                                        # logging.error(f"    Corresponding embedding vector (sample): {single_embedding[0, :10].tolist()}...")
+                                        found_bad_token = True
+                                        break # Stop checking this sequence
+                            if not found_bad_token:
+                                logging.info("EMBEDDING DEBUG: Batch embedding was non-finite, but couldn't isolate a single non-finite token embedding.")
+                        else:
+                             logging.info("EMBEDDING DEBUG: Direct batch embedding lookup was finite.")
+
+                    except Exception as e_embed_debug:
+                        logging.error(f"Exception during granular embedding debug: {e_embed_debug}", exc_info=True)
+                    logging.info("--- Finished Granular Embedding Debugging --- ")
+                    # --- End Granular Embedding Debugging ---
+                    
                     # Now raise the original error or a new one to halt
                     raise RuntimeError(f"Problematic batch at micro-step {global_micro_batch_step}. Detailed debug info logged. Halting.")
 
