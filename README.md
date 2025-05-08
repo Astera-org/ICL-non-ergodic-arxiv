@@ -167,20 +167,21 @@ Run the following cell in your Colab notebook to clone the project code:
 %cd ICL-non-ergodic-arxiv
 ```
 
-### 3. Configure Credentials (Colab Secrets)
+### 3. Configure Credentials (.env file - Less Secure)
 
-Store your sensitive keys securely using Colab's secrets manager:
+**Warning:** This method is less secure than using Colab Secrets as your keys will be visible in the notebook cell. Only use this method if you understand the risks and will not share your notebook.
 
-*   Click the "Key" icon (Secrets) in the left sidebar.
-*   Add the following secrets:
-    *   `WANDB_API_KEY`: Your Weights & Biases API key.
-    *   `AWS_ACCESS_KEY_ID`: Your AWS access key ID.
-    *   `AWS_SECRET_ACCESS_KEY`: Your AWS secret access key.
-*   Optionally, add:
-    *   `AWS_DEFAULT_REGION`: Your preferred AWS region (e.g., `us-west-2`).
-*   Make sure the toggle "Notebook access" is enabled for each secret.
+Create a `.env` file containing your credentials by running the following cell. Replace the placeholder values with your actual keys:
 
-These secrets will be available as environment variables to your Colab runtime, and the Python scripts (`fetch_arxiv.py`, `train.py`) are configured to pick them up automatically for W&B login and S3 access (`boto3`).
+```python
+%%writefile .env
+WANDB_API_KEY="YOUR_WANDB_KEY_HERE"
+AWS_ACCESS_KEY_ID="YOUR_AWS_ID_HERE"
+AWS_SECRET_ACCESS_KEY="YOUR_AWS_SECRET_HERE"
+# AWS_DEFAULT_REGION="your-region" # Optional: Uncomment and set if needed
+```
+
+Both the Python scripts (using `python-dotenv`) and the shell scripts (using the `source .env` logic we added) will load these credentials from the created `.env` file.
 
 ### 4. Install Dependencies (using uv)
 
