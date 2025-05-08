@@ -434,10 +434,89 @@ def train(args: argparse.Namespace):
                 accumulated_loss_for_opt_step += loss.item() 
                 # ... rest of micro-step logic (logging, incrementing step) ...
 
+                global_micro_batch_step += 1
+
                 # Optimizer step check
                 if global_micro_batch_step % args.gradient_accumulation_steps == 0:
-                    # ... (optimizer step, grad clipping, logging, checkpointing) ...
-                    pass # Placeholder for brevity
+                    # --- Restore the original optimizer step logic --- 
+                    global_optimizer_step += 1
+                    
+                    # Calculate norms based on accumulated gradients
+                    total_norm_before_clip = 0
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm_before_clip += param_norm.item() ** 2
+                    total_norm_before_clip = total_norm_before_clip ** 0.5
+                    
+                    # Add gradient clipping (Unscale grads first for fp16)
+                    scaler.unscale_(optimizer) # Unscale gradients before clipping for fp16
+                    clip_threshold = args.max_grad_norm # Use arg for max_grad_norm
+                    clip_hit = 1 if total_norm_before_clip > clip_threshold else 0
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold) # Clip accumulated gradients
+
+                    total_norm_after_clip = 0
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm_after_clip += param_norm.item() ** 2
+                    total_norm_after_clip = total_norm_after_clip ** 0.5
+                    
+                    # Optimizer step (using scaler for fp16)
+                    scaler.step(optimizer)
+                    scaler.update() # Update scaler for next iteration (for fp16)
+                    optimizer.zero_grad() # Reset gradients *after* optimizer step
+                    
+                    current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
+                    
+                    # --- Timing --- 
+                    current_time = time.time()
+                    time_per_opt_step = current_time - last_opt_step_time
+                    last_opt_step_time = current_time
+                    
+                    # --- Calculate Average Loss for Opt Step --- 
+                    avg_loss_this_opt_step = accumulated_loss_for_opt_step / args.gradient_accumulation_steps
+                    accumulated_loss_for_opt_step = 0.0 # Reset accumulator
+                    
+                    # --- Logging per Optimizer Step --- (This is the WandB part)
+                    if not args.disable_wandb and num_total_training_steps > 0:
+                        model_param_norm_current_step = torch.nn.utils.parameters_to_vector(
+                                                             [p.detach() for p in model.parameters()]
+                                                         ).norm().item()
+                        
+                        wandb_logs = {
+                            "train/avg_loss_per_opt_step": avg_loss_this_opt_step, 
+                            "train/learning_rate": current_lr,
+                            "train/global_optimizer_step": global_optimizer_step,
+                            "epoch": epoch + 1,
+                            "train/grad_norm_before_clip": total_norm_before_clip,
+                            "train/grad_norm_after_clip": total_norm_after_clip,
+                            "train/clip_hit": clip_hit, # Log if clipping occurred
+                            "train/time_per_opt_step": time_per_opt_step, # Log step time
+                            "train/model_param_norm_current_step": model_param_norm_current_step
+                        }
+                        wandb.log(wandb_logs)
+
+                    # Console logging at log_interval (based on optimizer steps)
+                    if global_optimizer_step % args.log_interval == 0 and num_total_training_steps > 0:
+                        logging.info(f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Avg Loss: {avg_loss_this_opt_step:.4f}") 
+                        logging.info(f"Gradient Norm (Opt Step): Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f} (Clip Hit: {clip_hit})")
+                        if 'model_param_norm_current_step' in locals(): 
+                             logging.info(f"Model Parameter Norm (Opt Step): {model_param_norm_current_step:.4f}")
+                        logging.info(f"Time per Opt Step: {time_per_opt_step:.2f}s")
+                
+                    # Checkpointing based on optimizer steps
+                    if args.checkpoint_interval_steps > 0 and (global_micro_batch_step % args.gradient_accumulation_steps == 0) and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0:
+                        step_checkpoint_path = step_checkpoints_dir / f"step_{global_optimizer_step}"
+                        model.save_pretrained(step_checkpoint_path)
+                        logging.info(f"Saved step-based checkpoint to {step_checkpoint_path} at optimizer step {global_optimizer_step}")
+                        saved_step_checkpoints.append(step_checkpoint_path)
+                        if args.max_step_checkpoints > 0 and len(saved_step_checkpoints) > args.max_step_checkpoints:
+                            oldest_checkpoint = saved_step_checkpoints.pop(0)
+                            if oldest_checkpoint.exists():
+                                shutil.rmtree(oldest_checkpoint)
+                                logging.info(f"Removed oldest step checkpoint: {oldest_checkpoint}")
+                    # --- End of restored optimizer step logic --- 
             
             if training_complete: 
                 break 
