@@ -245,6 +245,8 @@ def train(args: argparse.Namespace):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed) # For python's random ops (like category selection initial shuffle)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     # Enable anomaly detection for debugging NaNs
     torch.autograd.set_detect_anomaly(True)
@@ -325,6 +327,26 @@ def train(args: argparse.Namespace):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     logging.info(f"Using device: {device}")
     model.to(device)
+
+    # --- ADDED: Initial Embedding Weight Check ---
+    try:
+        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in'):
+            embed_weights = model.gpt_neox.embed_in.weight
+            logging.info(f"INITIAL CHECK: Checking embedding weights ({embed_weights.shape}) immediately after model.to(device)")
+            is_init_weights_finite = torch.isfinite(embed_weights).all().item()
+            logging.info(f"INITIAL CHECK: Embedding weights finite: {is_init_weights_finite}")
+            if not is_init_weights_finite:
+                logging.error("INITIAL CHECK FAILED: Embedding weights contain NaN/Inf right after initialization/move to device!")
+                # Optionally raise error here if needed, or let the training loop catch it later
+                # raise RuntimeError("Initial embedding weights are non-finite!") 
+            else:
+                logging.info(f"INITIAL CHECK: Weights Min: {embed_weights.min().item()}")
+                logging.info(f"INITIAL CHECK: Weights Max: {embed_weights.max().item()}")
+        else:
+             logging.warning("INITIAL CHECK: Could not find embedding layer (model.gpt_neox.embed_in) for initial weight check.")
+    except Exception as e_init_check:
+        logging.error(f"INITIAL CHECK: Error during initial embedding weight check: {e_init_check}")
+    # --- END ADDED CHECK ---
 
     # Log initial model parameter norm
     initial_model_param_norm = 0
