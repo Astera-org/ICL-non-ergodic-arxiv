@@ -11,16 +11,16 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # --- Configuration based on EXPERIMENT_PLAN.md Section 4 --- 
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped" # Model config for random init
 BATCH_SIZE=16           # Micro-batch size per device
-LEARNING_RATE=4e-4       # Peak learning rate (Scaled up with increased batch size; closer to Pythia's regime)
-LR_SCHEDULE_TYPE="cosine" # More standard schedule, matches Pythia's type
-NUM_WARMUP_STEPS=200       # ~1% of new estimated total steps
+LEARNING_RATE=2e-4       # Peak learning rate (Constant schedule - Scaled Rule of Thumb / 2)
+LR_SCHEDULE_TYPE="constant" # Constant scheduler for first test
+NUM_WARMUP_STEPS=0       # No warmup with constant LR
 WEIGHT_DECAY=0.01        # Weight decay (Matches Pythia)
-GRADIENT_ACCUMULATION_STEPS=32 # Increases global batch size 4x (with current micro-batch & seq length)
+GRADIENT_ACCUMULATION_STEPS=8 # Accumulate over 8 micro-batches
 SEQUENCE_LENGTH=256      # Sequence Length
 ADAM_BETA1=0.9           # Adam Beta1
 ADAM_BETA2=0.95          # Adam Beta2
 ADAM_EPSILON=1e-8        # Adam Epsilon
-MAX_GRAD_NORM=1.0        # Matches Pythia, aids stability
+MAX_GRAD_NORM=25.0        # Max Gradient Norm Clip
 PRECISION="fp32"         # bf16 for A100
 # EPOCHS=12              # Deprecated by token budget / max_steps
 TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
