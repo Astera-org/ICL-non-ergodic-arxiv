@@ -1,0 +1,494 @@
+import argparse
+import json
+import logging
+import os
+import random
+import shutil # For managing step checkpoints
+import sys
+from pathlib import Path
+from typing import List, Dict, Any, Optional # Added Optional here
+
+import torch
+import numpy as np
+from torch.utils.data import DataLoader
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, AdamW, get_scheduler # Added AutoConfig
+from tqdm import tqdm # For progress bars
+import wandb # Added wandb
+from dotenv import load_dotenv
+import boto3 # Added boto3 again (might be needed for upload func)
+from botocore.exceptions import ClientError # Added for S3 error handling
+
+# Add project root to sys.path to allow importing RandomWindowDataset
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from random_window_dataset import RandomWindowDataset, DEFAULT_PREPROCESSED_DIR, EFFECTIVE_WINDOW_SIZE # noqa
+# from fetch_arxiv import TOKENIZER_NAME # We'll define tokenizer name directly for now or get from args
+
+# Define the 11 target categories from EXPERIMENT_PLAN.md
+# These are the categories from which K will be selected.
+ALL_CATEGORIES = [
+    "cs.CV", "cs.AI", "cs.SY", "cs.CE", "cs.PL",
+    "cs.IT", "cs.DS", "cs.NE", "math.AC", "math.GR", "math.ST"
+]
+ALL_CATEGORIES.sort() # Ensure canonical order
+
+# Default tokenizer
+DEFAULT_MODEL_NAME = "EleutherAI/pythia-70m-deduped"
+
+# Load .env file as early as possible
+load_dotenv()
+
+def select_categories(all_categories: List[str], k: int, seed: int) -> List[str]:
+    """
+    Selects K categories deterministically based on a seed.
+    Sorts the base list, shuffles a copy, then selects the first K.
+    The selected list is also sorted for consistent run behavior.
+
+    Args:
+        all_categories: The full list of available category names.
+        k: The number of categories to select.
+        seed: The random seed to use for shuffling.
+
+    Returns:
+        A list containing the K selected category names.
+    """
+    if k < 1 or k > len(all_categories):
+        raise ValueError(f"K must be between 1 and {len(all_categories)}, got {k}")
+
+    sorted_cats = sorted(list(all_categories)) # Ensure base is sorted
+
+    rng = random.Random(seed) # Use a separate Random instance for local, seeded shuffling
+    shuffled_cats = list(sorted_cats) # Create a copy
+    rng.shuffle(shuffled_cats)
+
+    selected = shuffled_cats[:k]
+    return sorted(selected) # Return sorted selected list
+
+
+def setup_logging(output_dir: Path, run_name: str):
+    """Sets up logging to file and console."""
+    log_file = output_dir / f"{run_name}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logging.info(f"Logging to {log_file}")
+
+def save_args(args: argparse.Namespace, output_dir: Path, run_name: str):
+    """Saves arguments to a JSON file, converting Path objects to strings."""
+    args_path = output_dir / f"{run_name}_args.json"
+    args_dict = vars(args).copy() # Make a copy to modify
+    for key, value in args_dict.items():
+        if isinstance(value, Path):
+            args_dict[key] = str(value)
+    with open(args_path, 'w') as f:
+        json.dump(args_dict, f, indent=4)
+    logging.info(f"Saved arguments to {args_path}")
+
+def upload_directory_to_s3(local_directory: Path, bucket: str, s3_prefix: str):
+    """Uploads the contents of a local directory to S3.
+
+    Args:
+        local_directory (Path): The local directory to upload.
+        bucket (str): The target S3 bucket name.
+        s3_prefix (str): The prefix (folder path) within the S3 bucket.
+    """
+    # Check if directory exists and has content
+    if not local_directory.is_dir() or not any(local_directory.iterdir()):
+        logging.warning(f"Local directory {local_directory} does not exist or is empty. Skipping S3 upload.")
+        return
+        
+    try:
+        s3 = boto3.client('s3')
+    except Exception as e:
+        logging.error(f"Failed to create S3 client, skipping upload. Check credentials/config. Error: {e}")
+        return
+        
+    logging.info(f"Attempting to upload contents of {local_directory} to s3://{bucket}/{s3_prefix}")
+    num_uploaded = 0
+    num_failed = 0
+
+    for root, dirs, files in os.walk(local_directory):
+        for filename in files:
+            local_path = Path(root) / filename
+            # Create the relative path for the S3 key
+            relative_path = local_path.relative_to(local_directory)
+            s3_key = f"{s3_prefix.rstrip('/')}/{relative_path.as_posix()}"
+            
+            try:
+                logging.debug(f"Uploading {local_path} to {s3_key}...")
+                s3.upload_file(str(local_path), bucket, s3_key)
+                num_uploaded += 1
+            except ClientError as e:
+                logging.error(f"Failed to upload {local_path} to S3: {e}")
+                num_failed += 1
+            except Exception as e:
+                 logging.error(f"An unexpected error occurred during upload of {local_path}: {e}")
+                 num_failed += 1
+                 
+    if num_failed == 0:
+        logging.info(f"Successfully uploaded {num_uploaded} files to s3://{bucket}/{s3_prefix}")
+    else:
+        logging.warning(f"Completed upload attempt to s3://{bucket}/{s3_prefix} with {num_uploaded} successes and {num_failed} failures.")
+
+def evaluate(model: AutoModelForCausalLM, dataloader: DataLoader, device: torch.device, current_epoch: int, args: argparse.Namespace) -> float:
+    """Evaluates the model on the given dataloader.
+    Returns average loss.
+    """
+    model.eval()
+    total_loss = 0
+    num_batches = 0
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc=f"Epoch {current_epoch+1} Evaluating", leave=False):
+            input_ids = batch.to(device)
+            # For causal LM, the model handles shifting labels internally if `labels` are provided.
+            # If labels are not provided, it computes loss against shifted input_ids.
+            # Let's explicitly provide labels for clarity, same as input_ids.
+            labels = input_ids 
+            outputs = model(input_ids=input_ids, labels=labels)
+            total_loss += outputs.loss.item()
+            num_batches += 1
+    avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+    if not args.disable_wandb:
+        wandb.log({"eval/epoch_val_loss": avg_loss, "epoch": current_epoch + 1})
+    return avg_loss
+
+def train(args: argparse.Namespace):
+    """Main training function."""
+    # Create a unique run name
+    run_name_base = f"k{args.k}_seed{args.seed}_lr{args.learning_rate}_bs{args.batch_size}"
+    if args.run_suffix:
+        run_name_base += f"_{args.run_suffix}"
+
+    wandb_run_name = args.wandb_run_name if args.wandb_run_name else run_name_base
+
+    output_dir_for_run = args.output_dir / run_name_base
+    output_dir_for_run.mkdir(parents=True, exist_ok=True)
+    step_checkpoints_dir = output_dir_for_run / "step_checkpoints"
+    if args.checkpoint_interval_steps > 0:
+        step_checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+    setup_logging(output_dir_for_run, run_name_base)
+    save_args(args, output_dir_for_run, run_name_base)
+
+    # Initialize W&B
+    if not args.disable_wandb:
+        try:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity, # Optional
+                name=wandb_run_name,
+                config=vars(args) # Log all hyperparameters
+            )
+            logging.info(f"Weights & Biases initialized for run: {wandb_run_name}, project: {args.wandb_project}")
+        except Exception as e:
+            logging.error(f"Failed to initialize Weights & Biases: {e}")
+            logging.warning("Proceeding without W&B logging.")
+            args.disable_wandb = True # Disable if init fails
+
+    logging.info(f"Starting training run: {run_name_base}")
+    logging.info(f"Output directory: {output_dir_for_run}")
+
+    # Set seeds for reproducibility
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed) # For python's random ops (like category selection initial shuffle)
+
+    # 1. Select K categories
+    selected_train_categories = select_categories(ALL_CATEGORIES, k=args.k, seed=args.seed)
+    logging.info(f"Selected {args.k} categories for training (seed {args.seed}): {selected_train_categories}")
+
+    # 2. Setup Datasets and DataLoaders
+    logging.info("Setting up datasets and dataloaders...")
+    preprocessed_data_path = args.preprocessed_data_dir
+
+    try:
+        train_dataset = RandomWindowDataset(
+            preprocessed_dir=preprocessed_data_path,
+            split="train",
+            target_categories=selected_train_categories
+        )
+        val_dataset = RandomWindowDataset(
+            preprocessed_dir=preprocessed_data_path,
+            split="validation",
+            target_categories=selected_train_categories # Use same categories for validation
+        )
+    except FileNotFoundError:
+        logging.error(f"Preprocessed data not found in {preprocessed_data_path}. Please run fetch_arxiv.py first.")
+        if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
+        return
+    except ValueError as e:
+        logging.error(f"Error initializing dataset (maybe no papers for selected categories?): {e}")
+        if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
+        return
+
+    if len(train_dataset) == 0:
+        logging.error("Training dataset is empty after filtering. Exiting.")
+        if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
+        return
+    if len(val_dataset) == 0:
+        logging.warning("Validation dataset is empty after filtering. Proceeding without validation.")
+    
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True, # Shuffle for training
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size, # Can use a larger batch size for validation if memory allows
+        shuffle=False, # No need to shuffle for validation
+        num_workers=args.num_workers,
+        pin_memory=True
+    ) if len(val_dataset) > 0 else None
+
+    logging.info(f"Train dataset size: {len(train_dataset)} (num batches per epoch: {len(train_dataloader)})")
+    if val_dataloader:
+        logging.info(f"Validation dataset size: {len(val_dataset)} (num batches per epoch: {len(val_dataloader)})")
+
+    # 3. Load Model and Tokenizer
+    logging.info(f"Loading model and tokenizer: {args.model_name_or_path}")
+    logging.info(f"Initializing model from config: {args.model_name_or_path} (random initialization).")
+    config = AutoConfig.from_pretrained(args.model_name_or_path)
+    model = AutoModelForCausalLM.from_config(config)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu")
+    logging.info(f"Using device: {device}")
+    model.to(device)
+
+    # 4. Optimizer and Scheduler
+    logging.info("Setting up optimizer and scheduler...")
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    
+    # Determine total training steps
+    if args.token_budget > 0:
+        tokens_per_step = args.batch_size * EFFECTIVE_WINDOW_SIZE
+        if tokens_per_step == 0: # Should not happen with valid batch_size & EFFECTIVE_WINDOW_SIZE
+            logging.error("Cannot calculate steps: tokens_per_step is zero.")
+            if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
+            return
+        num_total_training_steps = args.token_budget // tokens_per_step
+        logging.info(f"Token budget: {args.token_budget} tokens. Calculated total training steps: {num_total_training_steps}")
+    else:
+        num_total_training_steps = args.epochs * len(train_dataloader)
+        logging.info(f"Epoch-based training. Total epochs: {args.epochs}. Max training steps: {num_total_training_steps}")
+    
+    if num_total_training_steps == 0 and (args.epochs > 0 or args.token_budget > 0) and len(train_dataloader) > 0:
+        logging.warning("Calculated num_total_training_steps is 0. This can happen if token_budget is too small for even one step, or if epochs=0 and token_budget=0. Training will not run effectively.")
+        # Allow to proceed if epochs and token_budget are both 0 (e.g. for a quick model load test), but log it.
+        if args.epochs == 0 and args.token_budget == 0:
+            logging.info("Epochs and Token Budget are both 0. No training steps will be performed.")
+        # else: # If one of them was >0 but still resulted in 0 steps, it's more of an issue.
+            # if not args.disable_wandb: wandb.finish(exit_code=1)
+            # return # Optionally exit
+
+    lr_scheduler = get_scheduler(
+        name=args.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=args.num_warmup_steps,
+        num_training_steps=num_total_training_steps
+    )
+
+    # 5. Training Loop
+    logging.info("Starting training loop...")
+    global_step = 0
+    best_val_loss = float('inf')
+    saved_step_checkpoints = []
+    training_complete = False
+    final_saved_model_path = output_dir_for_run / "final_model" # Define path earlier
+
+    try: 
+        for epoch in range(args.epochs if args.epochs > 0 else 1): # Ensure at least one pass if epochs=0 for setup code
+            if num_total_training_steps == 0 and args.token_budget == 0 and args.epochs == 0:
+                logging.info("Skipping training loop as epochs and token_budget are 0.")
+                training_complete = True
+                break # Skip training loop entirely
+            
+            model.train()
+            epoch_train_loss = 0
+            num_train_batches = 0
+            
+            progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs} Training", leave=False, disable=(num_total_training_steps == 0))
+            for batch_idx, batch in enumerate(progress_bar):
+                # This condition must be first to ensure we don't overshoot steps
+                if num_total_training_steps > 0 and global_step >= num_total_training_steps:
+                    logging.info(f"Reached target global steps ({global_step}/{num_total_training_steps}). Finishing training.")
+                    training_complete = True
+                    break 
+
+                input_ids = batch.to(device)
+                labels = input_ids # For Causal LM, model handles shifting
+                
+                outputs = model(input_ids=input_ids, labels=labels)
+                loss = outputs.loss
+                
+                loss.backward()
+                optimizer.step()
+                if num_total_training_steps > 0: # Only step scheduler if there are training steps
+                    lr_scheduler.step()
+                optimizer.zero_grad()
+                
+                epoch_train_loss += loss.item()
+                num_train_batches += 1
+                global_step += 1
+
+                current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
+                if global_step % args.log_interval == 0 and num_total_training_steps > 0:
+                    logging.info(f"Epoch {epoch+1}, Batch {batch_idx+1}/{len(train_dataloader)}, Step {global_step}/{num_total_training_steps}, LR {current_lr:.2e}, Loss: {loss.item():.4f}")
+                
+                if not args.disable_wandb and num_total_training_steps > 0:
+                    wandb.log({
+                        "train/loss": loss.item(), 
+                        "train/learning_rate": current_lr,
+                        "train/global_step": global_step,
+                        "epoch": epoch + 1 # Log current epoch for x-axis options
+                    })
+                
+                if num_total_training_steps > 0: progress_bar.set_postfix({'loss': loss.item()})
+
+                if args.checkpoint_interval_steps > 0 and global_step % args.checkpoint_interval_steps == 0 and global_step > 0:
+                    step_checkpoint_path = step_checkpoints_dir / f"step_{global_step}"
+                    model.save_pretrained(step_checkpoint_path)
+                    logging.info(f"Saved step-based checkpoint to {step_checkpoint_path} at step {global_step}")
+                    saved_step_checkpoints.append(step_checkpoint_path)
+                    if args.max_step_checkpoints > 0 and len(saved_step_checkpoints) > args.max_step_checkpoints:
+                        oldest_checkpoint = saved_step_checkpoints.pop(0)
+                        if oldest_checkpoint.exists():
+                            shutil.rmtree(oldest_checkpoint)
+                            logging.info(f"Removed oldest step checkpoint: {oldest_checkpoint}")
+            
+            if training_complete: 
+                break 
+            
+            # Log epoch average loss only if some training happened in this epoch
+            if num_train_batches > 0:
+                avg_epoch_train_loss = epoch_train_loss / num_train_batches
+                logging.info(f"Epoch {epoch+1} average training loss: {avg_epoch_train_loss:.4f}")
+                if not args.disable_wandb:
+                    wandb.log({"train/epoch_avg_loss": avg_epoch_train_loss, "epoch": epoch + 1})
+
+            # Perform validation at specified interval or at the end if budget not met by epoch end
+            perform_eval = val_dataloader and \
+                           ( (epoch + 1) % args.eval_interval == 0 or \
+                             (epoch + 1) == args.epochs and not training_complete ) # Also eval at last epoch if budget not met
+            
+            if perform_eval:
+                logging.info(f"Evaluating at end of epoch {epoch+1}...")
+                val_loss = evaluate(model, val_dataloader, device, epoch, args)
+                logging.info(f"Epoch {epoch+1} validation loss: {val_loss:.4f}")
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    logging.info(f"New best validation loss: {best_val_loss:.4f}. Saving model...")
+                    best_model_path = output_dir_for_run / "best_model"
+                    model.save_pretrained(best_model_path)
+                    # If a tokenizer were used and needed saving: tokenizer.save_pretrained(best_model_path)
+                    logging.info(f"Saved best model to {best_model_path}")
+                    if not args.disable_wandb:
+                        wandb.summary["best_val_loss"] = best_val_loss
+            elif not val_dataloader and args.checkpoint_interval_steps == 0 and num_train_batches > 0: 
+                 logging.info(f"No validation loader and no step checkpointing. Saving model at end of epoch {epoch+1}.")
+                 current_epoch_model_path = output_dir_for_run / f"model_epoch_{epoch+1}"
+                 model.save_pretrained(current_epoch_model_path)
+                 logging.info(f"Saved model to {current_epoch_model_path}")
+
+    except Exception as e:
+        logging.exception("An error occurred during the training loop.")
+        # Ensure wandb is finished even if error occurs
+        if not args.disable_wandb and wandb.run is not None:
+            wandb.finish(exit_code=1) 
+        # Don't re-raise yet, allow finally block to run
+        raise # Re-raise after finally
+
+    finally:
+        logging.info("Training loop finished or interrupted. Proceeding to final steps.")
+        try:
+             # Save final model state regardless of loop completion reason (unless error stopped before model init)
+             if 'model' in locals(): 
+                 model.save_pretrained(final_saved_model_path)
+                 logging.info(f"Saved final model state to {final_saved_model_path}")
+             else:
+                 logging.warning("Model variable not found, cannot save final model.")
+        except Exception as e:
+             logging.error(f"Failed to save final model: {e}")
+
+        if not args.disable_wandb and wandb.run is not None:
+            logging.info("Finishing W&B run...")
+            exit_code = 0 if training_complete or epoch == args.epochs -1 else 1 # Mark successful if loop completed naturally or hit budget
+            wandb.finish(exit_code=exit_code)
+            
+        if args.upload_results_to_s3:
+            if not args.s3_results_bucket:
+                logging.error("S3 results bucket name must be provided using --s3_results_bucket to upload results.")
+            else:
+                s3_upload_prefix = (args.s3_results_prefix.rstrip('/') + '/' + run_name_base).lstrip('/')
+                upload_directory_to_s3(output_dir_for_run, args.s3_results_bucket, s3_upload_prefix)
+        
+        logging.info("Script execution complete.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train a Pythia model on ArXiv dataset for selected categories. Model is always randomly initialized.")
+
+    # Paths and naming
+    parser.add_argument("--preprocessed_data_dir", type=Path, default=DEFAULT_PREPROCESSED_DIR, help="Directory with preprocessed data (tokens.bin, index.jsonl, splits.json).")
+    parser.add_argument("--output_dir", type=Path, default=Path("./training_output"), help="Root directory to save training outputs (logs, models).")
+    parser.add_argument("--run_suffix", type=str, default="", help="Optional suffix for the run name.")
+    
+    # Model and Tokenizer
+    parser.add_argument("--model_name_or_path", type=str, default=DEFAULT_MODEL_NAME, help="Model name or path for AutoConfig (e.g., EleutherAI/pythia-70m-deduped). Model will be randomly initialized using this config.")
+
+    # Category selection
+    parser.add_argument("-k", "--k", type=int, required=True, help="Number of categories to select for training (1 to 11).")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for category selection and training initialization.")
+
+    # Training hyperparameters
+    parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate for AdamW optimizer.")
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
+    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine).")
+    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps for the LR scheduler.")
+    
+    # Dataloader and System
+    parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
+    parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
+
+    # Logging and Checkpointing (add more later)
+    parser.add_argument("--log_interval", type=int, default=100, help="Log training loss every N steps.")
+    parser.add_argument("--eval_interval", type=int, default=1, help="Evaluate on validation set every N epochs (if validation data exists).")
+
+    # W&B arguments
+    parser.add_argument("--wandb_project", type=str, default="icl-non-ergodic-arxiv", help="Weights & Biases project name.")
+    parser.add_argument("--wandb_entity", type=str, default=None, help="Weights & Biases entity (username or team).")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="Custom run name for Weights & Biases.")
+    parser.add_argument("--disable_wandb", action="store_true", help="Disable Weights & Biases logging.")
+
+    # New arguments for step-based checkpointing
+    parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N steps. 0 to disable step checkpointing. Checkpoints are saved only if global_step > 0.")
+    parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
+
+    # New argument for token budget
+    parser.add_argument("--token_budget", type=int, default=0, help="Total number of tokens to train on. If >0, this primarily determines training duration. Default: 0 (use epochs).")
+
+    # --- S3 Result Upload Arguments ---
+    parser.add_argument("--upload_results_to_s3", action="store_true",
+                        help="Upload the final training output directory to S3.")
+    parser.add_argument("--s3_results_bucket", type=str, default=None,
+                        help="S3 bucket name for uploading training results.")
+    parser.add_argument("--s3_results_prefix", type=str, default="training_runs",
+                        help="Prefix (folder path) within the S3 results bucket. Run name will be appended.")
+
+    args = parser.parse_args()
+
+    if not 1 <= args.k <= len(ALL_CATEGORIES):
+        parser.error(f"K must be between 1 and {len(ALL_CATEGORIES)}. Got {args.k}.")
+
+    train(args) 
