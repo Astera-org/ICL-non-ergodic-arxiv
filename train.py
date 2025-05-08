@@ -421,27 +421,80 @@ def train(args: argparse.Namespace):
                     first_batch_checked = True
                 # --- End Checksum ---
                 
-                # Mixed Precision Context / Forward Pass
-                if args.precision != 'fp32':
-                    # Use autocast only for fp16/bf16
-                    with torch.amp.autocast(device_type=device.type, dtype=dtype):
-                        outputs = model(input_ids=input_ids, labels=labels)
-                        loss = outputs.loss
-                else:
-                    # Run directly in fp32 without autocast context
-                    outputs = model(input_ids=input_ids, labels=labels)
-                    loss = outputs.loss
-                
-                # Check loss finiteness (still useful)
-                if torch.isnan(loss) or torch.isinf(loss):
-                    logging.error(f"NaN or Inf loss detected at Micro-step {global_micro_batch_step} BEFORE backward(). Loss: {loss.item()}")
-                    if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
-                    raise ValueError(f"NaN or Inf loss detected BEFORE backward() at Opt Step {global_optimizer_step}")
+                # --- Gradient accumulation loop ---
+                # Loop over micro-batches for gradient accumulation
+                # Note: micro_step_idx goes from 0 to gradient_accumulation_steps - 1
+                batch_input_ids = input_ids
+                batch_target_ids = labels
 
-                normalized_loss = loss / args.gradient_accumulation_steps
-                scaler.scale(normalized_loss).backward() # detect_anomaly will monitor this
+                # --- Forward pass ---
+                if args.precision != "fp32" and device.type == 'cuda':
+                    # Autocast for bf16/fp16 on CUDA
+                    with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16 if args.precision == "bf16" else torch.float16):
+                        outputs = model(input_ids=batch_input_ids) 
+                        loss = outputs.loss
+                else: # fp32 or CPU
+                    outputs = model(input_ids=batch_input_ids)
+                    # Check for NaN/Inf in logits before loss calculation
+                    if not torch.isfinite(outputs.logits).all():
+                        logging.error(f"Infinite/NaN logit detected at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step+1}")
+                        logging.error(f"Logits min: {outputs.logits.min().item()}, max: {outputs.logits.max().item()}, mean: {outputs.logits.mean().item()}")
+                        
+                        problematic_dir = Path("./problematic_batch_data")
+                        problematic_dir.mkdir(exist_ok=True)
+                        torch.save(batch_input_ids, problematic_dir / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.pt")
+                        torch.save(batch_target_ids, problematic_dir / f"problematic_target_ids_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.pt")
+                        current_args_dict = vars(args)
+                        with open(problematic_dir / f"problematic_run_args_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.json", "w") as f:
+                            json.dump(current_args_dict, f, indent=4)
+                        logging.info(f"Saved problematic batch input_ids, target_ids, and args to {problematic_dir}")
+
+                        nan_inf_mask = ~torch.isfinite(outputs.logits)
+                        num_nan_inf_logits = nan_inf_mask.sum().item()
+                        logging.error(f"Number of non-finite logits: {num_nan_inf_logits} out of {outputs.logits.numel()}")
+                        if num_nan_inf_logits < 20:
+                            non_finite_indices = nan_inf_mask.nonzero(as_tuple=False)
+                            logging.error(f"Indices of non-finite logits: {non_finite_indices.tolist()}")
+                        
+                        raise RuntimeError(f"Infinite/NaN logit detected at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step+1}. See logs and problematic_batch_data/ for details.")
+                    else:
+                        # Logits are finite. If this is the specific micro-step of interest (Opt Step 1, Micro-step 8), log their stats.
+                        if global_optimizer_step == 1 and (global_micro_batch_step + 1) == 8:
+                            logits_min = outputs.logits.min().item()
+                            logits_max = outputs.logits.max().item()
+                            logits_mean = outputs.logits.mean().item()
+                            logging.info(f"DEBUG (Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step+1}): Finite Logits Stats before loss: Min={logits_min:.4e}, Max={logits_max:.4e}, Mean={logits_mean:.4e}")
+
+                        loss = outputs.loss
                 
-                accumulated_loss_for_opt_step += loss.item() 
+                # Check loss value BEFORE backward (this check has been very useful)
+                if not torch.isfinite(loss):
+                    logging.error(f"NaN or Inf loss detected at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step} BEFORE backward(). Loss: {loss.item()}")
+                    if torch.isfinite(outputs.logits).all():
+                        logging.error("Context: This NaN loss occurred despite the model's output logits being finite. Check logged logit stats if it was the problematic step.")
+                    else:
+                        logging.error("Context: This NaN loss likely originated from NaN/Inf logits (which should have been caught by the check above).")
+                    
+                    if not (Path("./problematic_batch_data") / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.pt").exists():
+                        problematic_dir = Path("./problematic_batch_data")
+                        problematic_dir.mkdir(exist_ok=True)
+                        torch.save(batch_input_ids, problematic_dir / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.pt")
+                        torch.save(batch_target_ids, problematic_dir / f"problematic_target_ids_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.pt")
+                        current_args_dict = vars(args)
+                        with open(problematic_dir / f"problematic_run_args_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.json", "w") as f:
+                            json.dump(current_args_dict, f, indent=4)
+                        logging.info(f"Saved batch data due to NaN loss (logits were finite) to {problematic_dir}")
+
+                    raise ValueError(f"NaN or Inf loss detected BEFORE backward() at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step}")
+
+                loss = loss / args.gradient_accumulation_steps # Normalize loss for accumulation
+                
+                # --- Backward pass with scaler for mixed precision ---
+                # scaler.scale(loss).backward() should be done for both fp32 and mixed precision paths
+                # if scaler is enabled. For fp32, scaler.scale(loss) is just loss if scaler is a no-op GradScaler.
+                scaler.scale(loss).backward() # detect_anomaly will monitor this if enabled
+                
+                accumulated_loss_for_opt_step += loss.item() # Accumulate *normalized* loss
                 global_micro_batch_step += 1
 
                 # Optimizer step check
