@@ -280,18 +280,22 @@ def train(args: argparse.Namespace):
     logging.info("Setting up optimizer and scheduler...")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, eps=1e-6)
     
-    # Determine total training steps
+    # Determine total training steps (optimizer steps)
     if args.token_budget > 0:
-        tokens_per_step = args.batch_size * EFFECTIVE_WINDOW_SIZE
-        if tokens_per_step == 0: # Should not happen with valid batch_size & EFFECTIVE_WINDOW_SIZE
-            logging.error("Cannot calculate steps: tokens_per_step is zero.")
+        tokens_per_optimizer_step = args.batch_size * EFFECTIVE_WINDOW_SIZE * args.gradient_accumulation_steps
+        if tokens_per_optimizer_step == 0: 
+            logging.error("Cannot calculate steps: tokens_per_optimizer_step is zero.")
             if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
             return
-        num_total_training_steps = args.token_budget // tokens_per_step
-        logging.info(f"Token budget: {args.token_budget} tokens. Calculated total training steps: {num_total_training_steps}")
+        # This is the total number of OPTIMIZER steps
+        num_total_training_steps = args.token_budget // tokens_per_optimizer_step 
+        logging.info(f"Token budget: {args.token_budget} tokens. Gradient Acc Steps: {args.gradient_accumulation_steps}. Calculated total optimizer steps: {num_total_training_steps}")
     else:
-        num_total_training_steps = args.epochs * len(train_dataloader)
-        logging.info(f"Epoch-based training. Total epochs: {args.epochs}. Max training steps: {num_total_training_steps}")
+        # If epoch-based, adjust total steps for gradient accumulation
+        num_micro_batches_per_epoch = len(train_dataloader)
+        num_optimizer_steps_per_epoch = num_micro_batches_per_epoch // args.gradient_accumulation_steps
+        num_total_training_steps = args.epochs * num_optimizer_steps_per_epoch
+        logging.info(f"Epoch-based training. Total epochs: {args.epochs}. Grad Acc Steps: {args.gradient_accumulation_steps}. Max optimizer steps: {num_total_training_steps}")
     
     if num_total_training_steps == 0 and (args.epochs > 0 or args.token_budget > 0) and len(train_dataloader) > 0:
         logging.warning("Calculated num_total_training_steps is 0. This can happen if token_budget is too small for even one step, or if epochs=0 and token_budget=0. Training will not run effectively.")
@@ -306,12 +310,13 @@ def train(args: argparse.Namespace):
         name=args.lr_scheduler_type,
         optimizer=optimizer,
         num_warmup_steps=args.num_warmup_steps,
-        num_training_steps=num_total_training_steps
+        num_training_steps=num_total_training_steps # Scheduler uses optimizer steps
     )
 
     # 5. Training Loop
     logging.info("Starting training loop...")
-    global_step = 0
+    global_optimizer_step = 0
+    global_micro_batch_step = 0
     best_val_loss = float('inf')
     saved_step_checkpoints = []
     training_complete = False
@@ -325,7 +330,7 @@ def train(args: argparse.Namespace):
         model_param_norm_before_loop = model_param_norm_before_loop ** 0.5
         logging.info(f"Model Parameter Norm before training loop: {model_param_norm_before_loop:.4f}")
         if not args.disable_wandb:
-             wandb.log({ "train/model_param_norm_before_loop": model_param_norm_before_loop, "train/global_step": 0})
+             wandb.log({ "train/model_param_norm_before_loop": model_param_norm_before_loop, "train/global_optimizer_step": 0})
 
         for epoch in range(args.epochs if args.epochs > 0 else 1): # Ensure at least one pass if epochs=0 for setup code
             if num_total_training_steps == 0 and args.token_budget == 0 and args.epochs == 0:
@@ -339,12 +344,13 @@ def train(args: argparse.Namespace):
             
             progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs} Training", leave=False, disable=(num_total_training_steps == 0))
             for batch_idx, batch in enumerate(progress_bar):
-                # This condition must be first to ensure we don't overshoot steps
-                if num_total_training_steps > 0 and global_step >= num_total_training_steps:
-                    logging.info(f"Reached target global steps ({global_step}/{num_total_training_steps}). Finishing training.")
+                # This condition must be first to ensure we don't overshoot OPTIMIZER steps
+                if num_total_training_steps > 0 and global_optimizer_step >= num_total_training_steps:
+                    logging.info(f"Reached target global optimizer steps ({global_optimizer_step}/{num_total_training_steps}). Finishing training.")
                     training_complete = True
                     break 
 
+                model.train() # Ensure model is in train mode 
                 input_ids = batch.to(device)
                 labels = input_ids # For Causal LM, model handles shifting
                 
@@ -352,87 +358,90 @@ def train(args: argparse.Namespace):
                 loss = outputs.loss
 
                 if torch.isnan(loss) or torch.isinf(loss):
-                    logging.error(f"NaN or Inf loss detected at Step {global_step}, Epoch {epoch+1}, Batch {batch_idx+1}. Loss: {loss.item()}")
+                    logging.error(f"NaN or Inf loss detected at Micro-step {global_micro_batch_step}, Opt Step {global_optimizer_step}, Epoch {epoch+1}. Loss: {loss.item()}")
                     # Optionally, log the input_ids that caused the NaN/Inf loss
                     # logging.error(f"Problematic input_ids (first example in batch): {input_ids[0][:20]}...") 
                     # Consider breaking or handling appropriately
                     if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
-                    raise ValueError(f"NaN or Inf loss detected at Step {global_step}")
+                    raise ValueError(f"NaN or Inf loss detected at Opt Step {global_optimizer_step}")
 
-                loss.backward()
+                # Normalize loss for accumulation
+                normalized_loss = loss / args.gradient_accumulation_steps
+                normalized_loss.backward()
                 
-                # Log grad norm before clipping
-                total_norm_before_clip = 0
-                for p in model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_norm_before_clip += param_norm.item() ** 2
-                total_norm_before_clip = total_norm_before_clip ** 0.5
-                
-                # Add gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip gradients
-
-                # Log grad norm after clipping
-                total_norm_after_clip = 0
-                for p in model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_norm_after_clip += param_norm.item() ** 2
-                total_norm_after_clip = total_norm_after_clip ** 0.5
-                
-                optimizer.step()
-                if num_total_training_steps > 0: # Only step scheduler if there are training steps
-                    lr_scheduler.step()
-                optimizer.zero_grad()
-                
-                epoch_train_loss += loss.item()
-                num_train_batches += 1
-                global_step += 1
-
-                current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
-                
-                # W&B logging every step
+                # Log micro-batch loss (optional, but can be useful)
                 if not args.disable_wandb and num_total_training_steps > 0:
-                    # Calculate current model parameter norm for logging
-                    # This was previously inside the log_interval block
-                    model_param_norm_current_step = 0
-                    for p in model.parameters():
-                        model_param_norm_current_step += p.data.norm(2).item() ** 2
-                    model_param_norm_current_step = model_param_norm_current_step ** 0.5
-                    
-                    wandb_logs = {
-                        "train/loss": loss.item(), 
-                        "train/learning_rate": current_lr,
-                        "train/global_step": global_step,
-                        "epoch": epoch + 1,
-                        "train/grad_norm_before_clip": total_norm_before_clip,
-                        "train/grad_norm_after_clip": total_norm_after_clip,
-                        "train/model_param_norm_current_step": model_param_norm_current_step
-                    }
-                    wandb.log(wandb_logs)
-
-                # Console logging at log_interval
-                if global_step % args.log_interval == 0 and num_total_training_steps > 0:
-                    logging.info(f"Epoch {epoch+1}, Batch {batch_idx+1}/{len(train_dataloader)}, Step {global_step}/{num_total_training_steps}, LR {current_lr:.2e}, Loss: {loss.item():.4f}")
-                    logging.info(f"Gradient Norm: Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
-                    # model_param_norm_current_step is already calculated above for W&B if not args.disable_wandb
-                    # If W&B is disabled, we might need to calculate it here or ensure it's available
-                    # For simplicity, let's assume if console logging is on, W&B might also be, or it's okay if this specific console log for param norm is missing when W&B is off
-                    if 'model_param_norm_current_step' in locals(): # Check if available from W&B logic
-                         logging.info(f"Model Parameter Norm (Step {global_step}): {model_param_norm_current_step:.4f}")
+                     wandb.log({ "train/micro_batch_loss": loss.item(), # Log original loss
+                                 "train/global_micro_batch_step": global_micro_batch_step})
                 
-                if num_total_training_steps > 0: progress_bar.set_postfix({'loss': loss.item()})
+                global_micro_batch_step += 1
 
-                if args.checkpoint_interval_steps > 0 and global_step % args.checkpoint_interval_steps == 0 and global_step > 0:
-                    step_checkpoint_path = step_checkpoints_dir / f"step_{global_step}"
-                    model.save_pretrained(step_checkpoint_path)
-                    logging.info(f"Saved step-based checkpoint to {step_checkpoint_path} at step {global_step}")
-                    saved_step_checkpoints.append(step_checkpoint_path)
-                    if args.max_step_checkpoints > 0 and len(saved_step_checkpoints) > args.max_step_checkpoints:
-                        oldest_checkpoint = saved_step_checkpoints.pop(0)
-                        if oldest_checkpoint.exists():
-                            shutil.rmtree(oldest_checkpoint)
-                            logging.info(f"Removed oldest step checkpoint: {oldest_checkpoint}")
+                # Optimizer step check
+                if global_micro_batch_step % args.gradient_accumulation_steps == 0:
+                    global_optimizer_step += 1
+                    
+                    # Calculate norms based on accumulated gradients
+                    total_norm_before_clip = 0
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm_before_clip += param_norm.item() ** 2
+                    total_norm_before_clip = total_norm_before_clip ** 0.5
+                    
+                    # Add gradient clipping
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip accumulated gradients
+
+                    total_norm_after_clip = 0
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm_after_clip += param_norm.item() ** 2
+                    total_norm_after_clip = total_norm_after_clip ** 0.5
+                    
+                    optimizer.step()
+                    if num_total_training_steps > 0: # Only step scheduler if there are training steps
+                        lr_scheduler.step()
+                    optimizer.zero_grad()
+                    
+                    current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
+                    
+                    # --- Logging per Optimizer Step ---
+                    # W&B logging every optimizer step
+                    if not args.disable_wandb and num_total_training_steps > 0:
+                        model_param_norm_current_step = 0
+                        for p in model.parameters():
+                            model_param_norm_current_step += p.data.norm(2).item() ** 2
+                        model_param_norm_current_step = model_param_norm_current_step ** 0.5
+                        
+                        wandb_logs = {
+                            # "train/loss": loss.item(), # Loss is per micro-batch, maybe log avg?
+                            "train/learning_rate": current_lr,
+                            "train/global_optimizer_step": global_optimizer_step,
+                            "epoch": epoch + 1,
+                            "train/grad_norm_before_clip": total_norm_before_clip,
+                            "train/grad_norm_after_clip": total_norm_after_clip,
+                            "train/model_param_norm_current_step": model_param_norm_current_step
+                        }
+                        wandb.log(wandb_logs)
+
+                    # Console logging at log_interval (based on optimizer steps)
+                    if global_optimizer_step % args.log_interval == 0 and num_total_training_steps > 0:
+                        logging.info(f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Last MicroBatch Loss: {loss.item():.4f}") # Log original loss of last micro-batch
+                        logging.info(f"Gradient Norm (Opt Step): Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
+                        if 'model_param_norm_current_step' in locals(): 
+                             logging.info(f"Model Parameter Norm (Opt Step): {model_param_norm_current_step:.4f}")
+                
+                    # Checkpointing based on optimizer steps
+                    if args.checkpoint_interval_steps > 0 and (global_micro_batch_step % args.gradient_accumulation_steps == 0) and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0:
+                        step_checkpoint_path = step_checkpoints_dir / f"step_{global_optimizer_step}"
+                        model.save_pretrained(step_checkpoint_path)
+                        logging.info(f"Saved step-based checkpoint to {step_checkpoint_path} at optimizer step {global_optimizer_step}")
+                        saved_step_checkpoints.append(step_checkpoint_path)
+                        if args.max_step_checkpoints > 0 and len(saved_step_checkpoints) > args.max_step_checkpoints:
+                            oldest_checkpoint = saved_step_checkpoints.pop(0)
+                            if oldest_checkpoint.exists():
+                                shutil.rmtree(oldest_checkpoint)
+                                logging.info(f"Removed oldest step checkpoint: {oldest_checkpoint}")
             
             if training_complete: 
                 break 
@@ -525,7 +534,8 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate for AdamW optimizer.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
     parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine).")
-    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps for the LR scheduler.")
+    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.")
     
     # Dataloader and System
     parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")

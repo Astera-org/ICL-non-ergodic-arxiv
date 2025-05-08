@@ -11,10 +11,11 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # --- Configuration based on EXPERIMENT_PLAN.md Section 4 --- 
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped" # Model config for random init
 BATCH_SIZE=256           # Global batch size
-LEARNING_RATE=1e-6       # Peak learning rate (Trying intermediate value)
+LEARNING_RATE=5e-5       # Peak learning rate (Increased due to gradient accum)
 LR_SCHEDULE_TYPE="cosine" # Cosine scheduler
-NUM_WARMUP_STEPS=500    # Warm-up steps (Modest warmup for lower LR)
+NUM_WARMUP_STEPS=2000    # Warm-up steps (in optimizer steps)
 WEIGHT_DECAY=0.1         # Weight decay
+GRADIENT_ACCUMULATION_STEPS=8 # Accumulate over 8 micro-batches
 # EPOCHS=12              # Deprecated by token budget / max_steps
 TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
 
@@ -61,6 +62,7 @@ for k_val in "${K_VALUES[@]}"; do
       "--lr_scheduler_type" "$LR_SCHEDULE_TYPE" \
       "--num_warmup_steps" "$NUM_WARMUP_STEPS" \
       "--weight_decay" "$WEIGHT_DECAY" \
+      "--gradient_accumulation_steps" "$GRADIENT_ACCUMULATION_STEPS" \
       "--token_budget" "$TOKEN_BUDGET" \
       "--epochs" "1000" \
       "--checkpoint_interval_steps" "$CHECKPOINT_INTERVAL" \
