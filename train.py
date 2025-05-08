@@ -5,6 +5,7 @@ import os
 import random
 import shutil # For managing step checkpoints
 import sys
+import time # For timing steps
 from pathlib import Path
 from typing import List, Dict, Any, Optional # Added Optional here
 
@@ -207,6 +208,17 @@ def train(args: argparse.Namespace):
     selected_train_categories = select_categories(ALL_CATEGORIES, k=args.k, seed=args.seed)
     logging.info(f"Selected {args.k} categories for training (seed {args.seed}): {selected_train_categories}")
 
+    # Load Tokenizer early for vocab size check
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            logging.info(f"Tokenizer pad_token set to eos_token: {tokenizer.eos_token}")
+        VOCAB_SIZE = tokenizer.vocab_size
+    except Exception as e:
+        logging.error(f"Failed to load tokenizer {args.model_name_or_path}: {e}")
+        return
+
     # 2. Setup Datasets and DataLoaders
     logging.info("Setting up datasets and dataloaders...")
     preprocessed_data_path = args.preprocessed_data_dir
@@ -326,6 +338,9 @@ def train(args: argparse.Namespace):
     best_val_loss = float('inf')
     saved_step_checkpoints = []
     training_complete = False
+    first_batch_checked = False # Flag for vocab check
+    accumulated_loss_for_opt_step = 0.0 # Accumulator for average loss
+    last_opt_step_time = time.time() # For timing steps
     final_saved_model_path = output_dir_for_run / "final_model" # Define path earlier
 
     try: 
@@ -360,6 +375,15 @@ def train(args: argparse.Namespace):
                 input_ids = batch.to(device)
                 labels = input_ids # For Causal LM, model handles shifting
                 
+                # --- Batch Checksum (Run Once) ---
+                if not first_batch_checked:
+                    max_token_id = input_ids.max().item()
+                    assert max_token_id < VOCAB_SIZE, \
+                        f"Batch contains token ID {max_token_id} >= vocab size {VOCAB_SIZE}. Check tokenization/data."
+                    logging.info("First batch token ID check passed.")
+                    first_batch_checked = True
+                # --- End Checksum ---
+                
                 outputs = model(input_ids=input_ids, labels=labels)
                 loss = outputs.loss
 
@@ -374,6 +398,8 @@ def train(args: argparse.Namespace):
                 # Normalize loss for accumulation
                 normalized_loss = loss / args.gradient_accumulation_steps
                 normalized_loss.backward()
+                
+                accumulated_loss_for_opt_step += loss.item() # Accumulate original loss
                 
                 # Log micro-batch loss (optional, but can be useful)
                 if not args.disable_wandb and num_total_training_steps > 0:
@@ -395,7 +421,9 @@ def train(args: argparse.Namespace):
                     total_norm_before_clip = total_norm_before_clip ** 0.5
                     
                     # Add gradient clipping
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip accumulated gradients
+                    clip_threshold = 1.0 # Max grad norm
+                    clip_hit = 1 if total_norm_before_clip > clip_threshold else 0
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_threshold) # Clip accumulated gradients
 
                     total_norm_after_clip = 0
                     for p in model.parameters():
@@ -411,31 +439,43 @@ def train(args: argparse.Namespace):
                     
                     current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
                     
+                    # --- Timing --- 
+                    current_time = time.time()
+                    time_per_opt_step = current_time - last_opt_step_time
+                    last_opt_step_time = current_time
+                    
+                    # --- Calculate Average Loss for Opt Step --- 
+                    avg_loss_this_opt_step = accumulated_loss_for_opt_step / args.gradient_accumulation_steps
+                    accumulated_loss_for_opt_step = 0.0 # Reset accumulator
+                    
                     # --- Logging per Optimizer Step ---
                     # W&B logging every optimizer step
                     if not args.disable_wandb and num_total_training_steps > 0:
-                        model_param_norm_current_step = 0
-                        for p in model.parameters():
-                            model_param_norm_current_step += p.data.norm(2).item() ** 2
-                        model_param_norm_current_step = model_param_norm_current_step ** 0.5
+                        # Use more efficient parameter norm calculation
+                        model_param_norm_current_step = torch.nn.utils.parameters_to_vector(
+                                                             [p.detach() for p in model.parameters()]
+                                                         ).norm().item()
                         
                         wandb_logs = {
-                            # "train/loss": loss.item(), # Loss is per micro-batch, maybe log avg?
+                            "train/avg_loss_per_opt_step": avg_loss_this_opt_step, 
                             "train/learning_rate": current_lr,
                             "train/global_optimizer_step": global_optimizer_step,
                             "epoch": epoch + 1,
                             "train/grad_norm_before_clip": total_norm_before_clip,
                             "train/grad_norm_after_clip": total_norm_after_clip,
+                            "train/clip_hit": clip_hit, # Log if clipping occurred
+                            "train/time_per_opt_step": time_per_opt_step, # Log step time
                             "train/model_param_norm_current_step": model_param_norm_current_step
                         }
                         wandb.log(wandb_logs)
 
                     # Console logging at log_interval (based on optimizer steps)
                     if global_optimizer_step % args.log_interval == 0 and num_total_training_steps > 0:
-                        logging.info(f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Last MicroBatch Loss: {loss.item():.4f}") # Log original loss of last micro-batch
-                        logging.info(f"Gradient Norm (Opt Step): Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f}")
+                        logging.info(f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Avg Loss: {avg_loss_this_opt_step:.4f}") 
+                        logging.info(f"Gradient Norm (Opt Step): Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f} (Clip Hit: {clip_hit})")
                         if 'model_param_norm_current_step' in locals(): 
                              logging.info(f"Model Parameter Norm (Opt Step): {model_param_norm_current_step:.4f}")
+                        logging.info(f"Time per Opt Step: {time_per_opt_step:.2f}s")
                 
                     # Checkpointing based on optimizer steps
                     if args.checkpoint_interval_steps > 0 and (global_micro_batch_step % args.gradient_accumulation_steps == 0) and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0:
@@ -453,11 +493,14 @@ def train(args: argparse.Namespace):
                 break 
             
             # Log epoch average loss only if some training happened in this epoch
-            if num_train_batches > 0:
-                avg_epoch_train_loss = epoch_train_loss / num_train_batches
-                logging.info(f"Epoch {epoch+1} average training loss: {avg_epoch_train_loss:.4f}")
-                if not args.disable_wandb:
-                    wandb.log({"train/epoch_avg_loss": avg_epoch_train_loss, "epoch": epoch + 1})
+            # Note: epoch_train_loss accumulates the *last* micro-batch loss, not the average
+            # This calculation might be less meaningful now. We could accumulate avg_loss_this_opt_step instead?
+            # Let's comment it out for now to avoid confusion, as optimizer-step avg loss is logged.
+            # if num_train_batches > 0: 
+            #     avg_epoch_train_loss = epoch_train_loss / num_train_batches
+            #     logging.info(f"Epoch {epoch+1} average training loss: {avg_epoch_train_loss:.4f}")
+            #     if not args.disable_wandb:
+            #         wandb.log({"train/epoch_avg_loss": avg_epoch_train_loss, "epoch": epoch + 1})
 
             # Perform validation at specified interval or at the end if budget not met by epoch end
             perform_eval = val_dataloader and \
