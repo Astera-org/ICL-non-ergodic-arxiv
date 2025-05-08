@@ -161,6 +161,50 @@ def evaluate(model: AutoModelForCausalLM, dataloader: DataLoader, device: torch.
         wandb.log({"eval/epoch_val_loss": avg_loss, "epoch": current_epoch + 1})
     return avg_loss
 
+# Define the forward_hook_fn for detailed debugging
+def forward_hook_fn_train_debug(module, input_tensors, output_tensors, module_name_tag="UnknownModule"):
+    # Using a distinct name to avoid any potential global scope collision if other hooks exist
+    # And passing a module_name_tag for clarity
+    
+    # For some modules, output_tensors might be a tuple
+    tensor_to_check = None
+    if isinstance(output_tensors, tuple) and len(output_tensors) > 0:
+        if isinstance(output_tensors[0], torch.Tensor):
+            tensor_to_check = output_tensors[0] 
+        # else:
+            # logging.debug(f"Hook on {module_name_tag}: Output tuple's first element not a tensor.")
+    elif isinstance(output_tensors, torch.Tensor):
+        tensor_to_check = output_tensors
+    
+    if tensor_to_check is None:
+        # logging.debug(f"Hook on {module_name_tag}: Output is not a tensor or recognized tuple. Type: {type(output_tensors)}. Skipping stats.")
+        return
+
+    is_finite = torch.isfinite(tensor_to_check).all().item()
+    has_nan = torch.isnan(tensor_to_check).any().item()
+    has_inf = torch.isinf(tensor_to_check).any().item()
+    
+    logging.info(f"--- DEBUG HOOK on: {module_name_tag} ({module.__class__.__name__}) ---")
+    logging.info(f"    Output Tensor Shape: {tensor_to_check.shape}")
+    logging.info(f"    Output All Finite: {is_finite}")
+    logging.info(f"    Output Has NaN: {has_nan}")
+    logging.info(f"    Output Has Inf: {has_inf}")
+    if not is_finite:
+        logging.warning(f"    NON-FINITE TENSOR DETECTED in {module_name_tag} ({module.__class__.__name__})!")
+        # Log min/max/mean only if they are meaningful
+        min_val, max_val, mean_val = "N/A", "N/A", "N/A"
+        try:
+            if not has_nan and not has_inf and tensor_to_check.numel() > 0: # Check numel to avoid errors on empty tensors
+                min_val = tensor_to_check.min().item()
+                max_val = tensor_to_check.max().item()
+                mean_val = tensor_to_check.float().mean().item()
+        except Exception as e:
+            logging.error(f"      Error calculating stats for non-finite tensor: {e}")
+        logging.info(f"    Min: {min_val}")
+        logging.info(f"    Max: {max_val}")
+        logging.info(f"    Mean: {mean_val}")
+
+
 def train(args: argparse.Namespace):
     """Main training function."""
     # Create a unique run name
@@ -382,20 +426,86 @@ def train(args: argparse.Namespace):
                 
                 # --- Save problematic batch for debugging ---
                 # global_micro_batch_step is 1-indexed based on logs
-                if global_micro_batch_step == 8:
+                if global_micro_batch_step == 8: # PROBLEM_STEP_TRIGGER
+                    logging.info(f"--- TRIGGERING DETAILED FORWARD PASS DEBUG AT MICRO-STEP {global_micro_batch_step} ---")
                     problematic_batch_path = Path(output_dir_for_run) / "problematic_batch.pt"
-                    logging.info(f"Saving problematic batch (micro-step {global_micro_batch_step}) to {problematic_batch_path} for debugging.")
-                    torch.save(input_ids.cpu(), problematic_batch_path) # Save to CPU to avoid CUDA issues if loaded elsewhere
-                    # Also save args for easy repro if needed for the debug script
+                    logging.info(f"Saving current batch (micro-step {global_micro_batch_step}) to {problematic_batch_path} for reference.")
+                    torch.save(input_ids.cpu(), problematic_batch_path)
+                    
                     problematic_args_path = Path(output_dir_for_run) / "problematic_run_args.json"
                     args_dict_debug = vars(args).copy()
                     for key, value in args_dict_debug.items():
-                        if isinstance(value, Path):
-                            args_dict_debug[key] = str(value)
-                    with open(problematic_args_path, 'w') as f_debug:
-                        json.dump(args_dict_debug, f_debug, indent=4)
-                    logging.info(f"Saved args for problematic run to {problematic_args_path}")
-                    raise RuntimeError(f"Problematic batch at micro-step {global_micro_batch_step} saved. Halting for debug.")
+                        if isinstance(value, Path): args_dict_debug[key] = str(value)
+                    with open(problematic_args_path, 'w') as f_debug: json.dump(args_dict_debug, f_debug, indent=4)
+                    logging.info(f"Saved args for this run to {problematic_args_path}")
+
+                    # Register hooks for detailed debug pass
+                    hook_handles_debug = []
+                    hooks_registered_debug = False
+                    try:
+                        logger_hook = logging.getLogger("train_debug_hooks") # Use 'logging' directly as logger is not in this scope. Correct to 'logging'
+                        
+                        # 1. Embeddings
+                        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in'):
+                            hook_handles_debug.append(model.gpt_neox.embed_in.register_forward_hook(
+                                lambda m, i, o: forward_hook_fn_train_debug(m, i, o, "Embeddings")))
+                            logging.info("Registered DEBUG hook for Embeddings")
+                            hooks_registered_debug = True
+
+                        # 2. Transformer Blocks
+                        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'layers'):
+                            for i_layer, mod_layer in enumerate(model.gpt_neox.layers):
+                                hook_handles_debug.append(mod_layer.register_forward_hook(
+                                    lambda m, i, o, k=f"Layer_{i_layer}_Output": forward_hook_fn_train_debug(m, i, o, k)))
+                                logging.info(f"Registered DEBUG hook for Layer {i_layer} output")
+                                if hasattr(mod_layer, 'attention'):
+                                    hook_handles_debug.append(mod_layer.attention.register_forward_hook(
+                                        lambda m, i, o, k=f"Layer_{i_layer}_Attention_Output": forward_hook_fn_train_debug(m, i, o, k)))
+                                    logging.info(f"  Registered DEBUG hook for Layer {i_layer} Attention output")
+                                if hasattr(mod_layer, 'mlp'):
+                                    hook_handles_debug.append(mod_layer.mlp.register_forward_hook(
+                                        lambda m, i, o, k=f"Layer_{i_layer}_MLP_Output": forward_hook_fn_train_debug(m, i, o, k)))
+                                    logging.info(f"  Registered DEBUG hook for Layer {i_layer} MLP output")
+                        
+                        # 3. Final Layer Norm
+                        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'final_layer_norm'):
+                            hook_handles_debug.append(model.gpt_neox.final_layer_norm.register_forward_hook(
+                                lambda m, i, o: forward_hook_fn_train_debug(m, i, o, "FinalLayerNorm")))
+                            logging.info("Registered DEBUG hook for FinalLayerNorm")
+
+                        # 4. LM Head
+                        if hasattr(model, 'embed_out'):
+                            hook_handles_debug.append(model.embed_out.register_forward_hook(
+                                lambda m, i, o: forward_hook_fn_train_debug(m, i, o, "LM_Head_Logits")))
+                            logging.info("Registered DEBUG hook for LM Head")
+
+                        if not hooks_registered_debug:
+                            logging.warning("Could not register any debug hooks. Model structure might have changed or is unexpected.")
+
+                        logging.info(f"--- Performing DEBUG forward pass for micro-step {global_micro_batch_step} with hooks ---")
+                        model.eval() # Ensure model is in eval mode for this debug pass if it matters
+                        with torch.no_grad(): # No gradients needed for this debug pass
+                             # Use the current input_ids which is already on the correct device
+                            debug_outputs = model(input_ids=input_ids) 
+                        model.train() # Revert to train mode if it was changed
+                        logging.info(f"--- DEBUG forward pass for micro-step {global_micro_batch_step} completed ---")
+                        
+                        if hasattr(debug_outputs, 'logits'):
+                            final_logits_debug = debug_outputs.logits
+                            is_finite_debug = torch.isfinite(final_logits_debug).all().item()
+                            logging.info(f"Debug final logits are finite: {is_finite_debug}")
+                            if not is_finite_debug:
+                                logging.error("DEBUG RUN CONFIRMS: FINAL LOGITS ARE NON-FINITE ON THIS BATCH IN COLAB GPU ENV!")
+
+                    except Exception as e_debug:
+                        logging.error(f"Exception during detailed debug forward pass: {e_debug}", exc_info=True)
+                    finally:
+                        for handle in hook_handles_debug:
+                            handle.remove()
+                        logging.info("Removed all DEBUG hooks.")
+                    
+                    # Now raise the original error or a new one to halt
+                    raise RuntimeError(f"Problematic batch at micro-step {global_micro_batch_step}. Detailed debug info logged. Halting.")
 
                 # --- Batch Checksum (Run Once) ---
                 if not first_batch_checked:
