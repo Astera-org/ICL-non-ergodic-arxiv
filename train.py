@@ -614,6 +614,11 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N steps. 0 to disable step checkpointing. Checkpoints are saved only if global_step > 0.")
     parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
 
+    # S3 Upload arguments
+    parser.add_argument("--upload_results_to_s3", action="store_true", help="Upload final results directory to S3.")
+    parser.add_argument("--s3_results_bucket", type=str, default=None, help="S3 bucket name for uploading results.")
+    parser.add_argument("--s3_results_prefix", type=str, default="training_runs/", help="S3 prefix (folder) for uploading results.")
+
     # --- Training Configuration --- (Newer block, likely source of duplication)
     parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for training samples.")
     # Remove duplicate --epochs definition from here
