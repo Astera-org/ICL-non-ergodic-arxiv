@@ -684,6 +684,7 @@ def train(args: argparse.Namespace):
                         optimizer.step()
 
                     optimizer.zero_grad() 
+                    lr_scheduler.step() # Step the scheduler *after* the optimizer step
                     
                     global_optimizer_step += 1 
 
