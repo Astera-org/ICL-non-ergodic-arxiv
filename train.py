@@ -608,6 +608,32 @@ def train(args: argparse.Namespace):
                 # Scale loss and call backward using GradScaler for fp16, normal backward for bf16/fp32
                 scaler.scale(normalized_loss).backward()
                 
+                # --- ADDED: Check embedding gradients after backward --- 
+                try:
+                    if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in') and model.gpt_neox.embed_in.weight.grad is not None:
+                        embed_grad = model.gpt_neox.embed_in.weight.grad
+                        is_embed_grad_finite = torch.isfinite(embed_grad).all().item()
+                        if not is_embed_grad_finite:
+                            logging.error(f"NON-FINITE embedding gradients detected immediately after backward() at micro-step: {global_micro_batch_step}!")
+                            logging.error(f"  Gradient Has NaN: {torch.isnan(embed_grad).any().item()}")
+                            logging.error(f"  Gradient Has Inf: {torch.isinf(embed_grad).any().item()}")
+                            # Save the batch that caused this immediate grad issue
+                            bad_grad_batch_path = Path(output_dir_for_run) / f"bad_grad_batch_step_{global_micro_batch_step}.pt"
+                            logging.info(f"Saving batch from micro-step {global_micro_batch_step} to {bad_grad_batch_path}")
+                            torch.save(input_ids.cpu(), bad_grad_batch_path)
+                            # Halt execution
+                            raise RuntimeError(f"Non-finite embedding gradients detected at micro-step {global_micro_batch_step}. Halting.")
+                        # else:
+                            # Optional: Log if gradients are finite
+                            # logging.info(f"Micro-step {global_micro_batch_step}: Embedding gradients are finite.")
+                    elif hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in') and model.gpt_neox.embed_in.weight.grad is None:
+                         logging.warning(f"Micro-step {global_micro_batch_step}: Embedding gradient is None after backward(). This might be expected if frozen or an issue.")
+                    # else: # Should not happen if model structure is as expected
+                         # logging.warning(f"Micro-step {global_micro_batch_step}: Could not access embedding layer or its gradient.")
+                except Exception as e_grad_check:
+                    logging.error(f"Error during embedding gradient check at micro-step {global_micro_batch_step}: {e_grad_check}", exc_info=True)
+                # --- END ADDED CHECK ---
+
                 accumulated_loss_for_opt_step += loss.item() # Accumulate original loss
                 
                 # Log micro-batch loss (optional, but can be useful)
