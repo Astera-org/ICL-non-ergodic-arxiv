@@ -118,8 +118,7 @@ def main():
         val_dataset = RandomWindowDataset(
             preprocessed_dir=args.preprocessed_data_dir,
             split="validation",
-            target_categories=val_categories,
-            tokenizer_name=args.model_name_or_path # Important if tokenizer changes for different models
+            target_categories=val_categories
         )
     except FileNotFoundError:
         logging.error(f"Preprocessed data not found in {args.preprocessed_data_dir}. Please run fetch_arxiv.py first.")
