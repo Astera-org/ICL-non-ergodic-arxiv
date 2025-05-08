@@ -380,6 +380,23 @@ def train(args: argparse.Namespace):
                 input_ids = batch.to(device)
                 labels = input_ids # For Causal LM, model handles shifting
                 
+                # --- Save problematic batch for debugging ---
+                # global_micro_batch_step is 1-indexed based on logs
+                if global_micro_batch_step == 8:
+                    problematic_batch_path = Path(output_dir_for_run) / "problematic_batch.pt"
+                    logging.info(f"Saving problematic batch (micro-step {global_micro_batch_step}) to {problematic_batch_path} for debugging.")
+                    torch.save(input_ids.cpu(), problematic_batch_path) # Save to CPU to avoid CUDA issues if loaded elsewhere
+                    # Also save args for easy repro if needed for the debug script
+                    problematic_args_path = Path(output_dir_for_run) / "problematic_run_args.json"
+                    args_dict_debug = vars(args).copy()
+                    for key, value in args_dict_debug.items():
+                        if isinstance(value, Path):
+                            args_dict_debug[key] = str(value)
+                    with open(problematic_args_path, 'w') as f_debug:
+                        json.dump(args_dict_debug, f_debug, indent=4)
+                    logging.info(f"Saved args for problematic run to {problematic_args_path}")
+                    raise RuntimeError(f"Problematic batch at micro-step {global_micro_batch_step} saved. Halting for debug.")
+
                 # --- Batch Checksum (Run Once) ---
                 if not first_batch_checked:
                     max_token_id = input_ids.max().item()
