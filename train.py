@@ -586,15 +586,16 @@ if __name__ == "__main__":
     parser.add_argument("-k", "--k", type=int, required=True, help="Number of categories to select for training (1 to 11).")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for category selection and training initialization.")
 
-    # Training hyperparameters
+    # Training hyperparameters (Original location)
     parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate for AdamW optimizer.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.") # Renamed help text
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.") # Updated help text
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
-    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine).")
+    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).") # Updated help text
     parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.")
-    
+    parser.add_argument("--token_budget", type=int, default=0, help="Total number of tokens to train on. If >0, this primarily determines training duration. Default: 0 (use epochs).") # Added token budget here
+
     # Dataloader and System
     parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
     parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
@@ -613,30 +614,26 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N steps. 0 to disable step checkpointing. Checkpoints are saved only if global_step > 0.")
     parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
 
-    # New argument for token budget
-    parser.add_argument("--token_budget", type=int, default=0, help="Total number of tokens to train on. If >0, this primarily determines training duration. Default: 0 (use epochs).")
-
-    # --- S3 Result Upload Arguments ---
-    parser.add_argument("--upload_results_to_s3", action="store_true",
-                        help="Upload the final training output directory to S3.")
-    parser.add_argument("--s3_results_bucket", type=str, default=None,
-                        help="S3 bucket name for uploading training results.")
-    parser.add_argument("--s3_results_prefix", type=str, default="training_runs",
-                        help="Prefix (folder path) within the S3 results bucket. Run name will be appended.")
-
-    # --- Training Configuration --- 
+    # --- Training Configuration --- (Newer block, likely source of duplication)
     parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for training samples.")
-    parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.")
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
+    # Remove duplicate --epochs definition from here
+    # parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.") 
+    # Remove duplicate --batch_size definition (already above)
+    # parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.") 
+    # Remove duplicate --learning_rate definition (already above)
+    # parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.") 
+    # Remove duplicate --weight_decay definition (already above)
+    # parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.") 
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="AdamW beta1 parameter.")
     parser.add_argument("--adam_beta2", type=float, default=0.95, help="AdamW beta2 parameter.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon parameter.")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum norm for gradient clipping.")
-    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).")
-    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.")
+    # Remove duplicate --lr_scheduler_type definition (already above)
+    # parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).") 
+    # Remove duplicate --num_warmup_steps definition (already above)
+    # parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.") 
+    # Remove duplicate --gradient_accumulation_steps definition (already above)
+    # parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.") 
     
     # --- Precision --- 
     parser.add_argument("--precision", type=str, default="bf16", choices=["fp32", "fp16", "bf16"], help="Training precision (bf16 recommended for A100).")
