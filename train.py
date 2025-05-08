@@ -43,41 +43,6 @@ DEFAULT_MODEL_NAME = "EleutherAI/pythia-70m-deduped"
 # Load .env file as early as possible
 load_dotenv()
 
-# --- Hook function to raise error on first non-finite detection --- 
-# Global flag to prevent redundant errors from subsequent hooks in the same pass
-_first_non_finite_detected = False
-
-def check_finite_hook(module, input_tensors, output_tensors, layer_name="UnknownLayer"):
-    global _first_non_finite_detected
-    if _first_non_finite_detected:
-        return # Stop checking if error already raised in this pass
-    
-    tensor_to_check = None
-    if isinstance(output_tensors, tuple) and len(output_tensors) > 0:
-        if isinstance(output_tensors[0], torch.Tensor):
-            tensor_to_check = output_tensors[0] 
-    elif isinstance(output_tensors, torch.Tensor):
-        tensor_to_check = output_tensors
-    
-    if tensor_to_check is not None:
-        if not torch.isfinite(tensor_to_check).all():
-            logging.error(f"!!! NON-FINITE TENSOR DETECTED in output of layer: {layer_name} ({module.__class__.__name__}) !!!")
-            logging.error(f"    Output Tensor Shape: {tensor_to_check.shape}")
-            logging.error(f"    Output Has NaN: {torch.isnan(tensor_to_check).any().item()}")
-            logging.error(f"    Output Has Inf: {torch.isinf(tensor_to_check).any().item()}")
-            _first_non_finite_detected = True # Set flag
-            # Optionally save input tensor to this layer for inspection
-            # try:
-            #     input_save_path = Path(f"./non_finite_input_to_{layer_name}.pt")
-            #     torch.save(input_tensors[0].cpu(), input_save_path)
-            #     logging.error(f"Saved input tensor to {input_save_path}")
-            # except Exception as e_save: 
-            #     logging.error(f"Could not save input tensor: {e_save}")
-            raise RuntimeError(f"Non-finite output detected in layer: {layer_name}")
-    # else:
-        # logging.debug(f"Hook on {layer_name}: No tensor output found to check.")
-# --- End Hook --- 
-
 def select_categories(all_categories: List[str], k: int, seed: int) -> List[str]:
     """
     Selects K categories deterministically based on a seed.
@@ -240,10 +205,9 @@ def train(args: argparse.Namespace):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    # --- Enable anomaly detection --- 
+    # Keep detect_anomaly enabled
     torch.autograd.set_detect_anomaly(True)
-    logging.info("Enabled torch.autograd.detect_anomaly for NaN/Inf gradient detection.")
-    # --- End anomaly detection --- 
+    logging.info("Enabled torch.autograd.detect_anomaly.")
 
     # 1. Select K categories
     selected_train_categories = select_categories(ALL_CATEGORIES, k=args.k, seed=args.seed)
@@ -322,23 +286,31 @@ def train(args: argparse.Namespace):
     logging.info(f"Using device: {device}")
     model.to(device)
 
-    # --- Initial Embedding Weight Check (Keep this) ---
+    # --- Initial/Manual Embedding Weight Init & Check ---
     try:
         if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in'):
+            logging.info("Manually re-initializing embedding layer weights with smaller stddev (0.01)")
+            std_dev = 0.01 # Smaller std dev for potentially more stable init
+            model.gpt_neox.embed_in.weight.data.normal_(mean=0.0, std=std_dev)
+            logging.info(f"Embedding weights re-initialized using normal_(mean=0.0, std={std_dev})")
+            
+            # Check weights immediately after manual re-init
             embed_weights = model.gpt_neox.embed_in.weight
-            logging.info(f"INITIAL CHECK: Checking embedding weights ({embed_weights.shape}) immediately after model.to(device)")
+            logging.info(f"INITIAL CHECK: Checking embedding weights ({embed_weights.shape}) after manual re-init")
             is_init_weights_finite = torch.isfinite(embed_weights).all().item()
             logging.info(f"INITIAL CHECK: Embedding weights finite: {is_init_weights_finite}")
             if not is_init_weights_finite:
-                 logging.error("INITIAL CHECK FAILED: Embedding weights contain NaN/Inf right after initialization/move to device!")
+                logging.error("INITIAL CHECK FAILED: Embedding weights NON-FINITE after manual re-init!")
             else:
-                 logging.info(f"INITIAL CHECK: Weights Min: {embed_weights.min().item()}")
-                 logging.info(f"INITIAL CHECK: Weights Max: {embed_weights.max().item()}")
+                logging.info(f"INITIAL CHECK: Weights Min: {embed_weights.min().item():.4f}")
+                logging.info(f"INITIAL CHECK: Weights Max: {embed_weights.max().item():.4f}")
+                # Log mean as well
+                logging.info(f"INITIAL CHECK: Weights Mean: {embed_weights.mean().item():.4f}")
         else:
-              logging.warning("INITIAL CHECK: Could not find embedding layer for initial weight check.")
+             logging.warning("INITIAL CHECK: Could not find embedding layer for re-init/check.")
     except Exception as e_init_check:
-        logging.error(f"INITIAL CHECK: Error during initial embedding weight check: {e_init_check}")
-    # --- END Initial Check ---
+        logging.error(f"INITIAL CHECK: Error during embedding weight re-init/check: {e_init_check}")
+    # --- END Init & Check ---
 
     # Log initial model parameter norm
     initial_model_param_norm = 0
@@ -394,7 +366,6 @@ def train(args: argparse.Namespace):
 
     # 5. Training Loop
     logging.info("Starting training loop...")
-    global _first_non_finite_detected # Allow modification of the global flag
     global_optimizer_step = 0
     global_micro_batch_step = 0
     best_val_loss = float('inf')
@@ -436,34 +407,8 @@ def train(args: argparse.Namespace):
                     break 
 
                 model.train() # Ensure model is in train mode 
-                global _first_non_finite_detected # Reset flag for each new potential forward pass
                 _first_non_finite_detected = False 
-                hook_handles = [] # Store hook handles to remove them later
                 
-                # --- Register Hooks before the forward pass --- 
-                try:
-                    if not _first_non_finite_detected: # Only register if no error yet
-                       # 1. Embeddings
-                        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in'):
-                           hook_handles.append(model.gpt_neox.embed_in.register_forward_hook(
-                               functools.partial(check_finite_hook, layer_name="Embeddings")))
-                        # 2. Transformer Blocks
-                        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'layers'):
-                            for i_layer, mod_layer in enumerate(model.gpt_neox.layers):
-                                hook_handles.append(mod_layer.register_forward_hook(
-                                   functools.partial(check_finite_hook, layer_name=f"Layer_{i_layer}_Output")))
-                        # 3. Final Layer Norm
-                        if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'final_layer_norm'):
-                             hook_handles.append(model.gpt_neox.final_layer_norm.register_forward_hook(
-                                functools.partial(check_finite_hook, layer_name="FinalLayerNorm")))
-                        # 4. LM Head
-                        if hasattr(model, 'embed_out'):
-                             hook_handles.append(model.embed_out.register_forward_hook(
-                                functools.partial(check_finite_hook, layer_name="LM_Head_Logits")))
-                except Exception as e_hook_reg:
-                    logging.error(f"Failed to register hooks: {e_hook_reg}")
-                # --- End Hook Registration ---
-
                 input_ids = batch.to(device)
                 labels = input_ids # For Causal LM, model handles shifting
                 
@@ -477,29 +422,20 @@ def train(args: argparse.Namespace):
                 # --- End Checksum ---
                 
                 # Mixed Precision Context
-                try:
-                    with torch.amp.autocast(device_type=device.type, enabled=(args.precision != 'fp32'), dtype=dtype):
-                        # Hooks will execute during this model call and raise error if non-finite found
-                        outputs = model(input_ids=input_ids, labels=labels)
-                        loss = outputs.loss
-                finally:
-                    # --- Remove hooks after the forward pass --- 
-                    for handle in hook_handles:
-                        handle.remove()
-                    # --- End Hook Removal --- 
-
-                # Check loss finiteness (as a fallback, hook should catch earlier)
+                with torch.amp.autocast(device_type=device.type, enabled=(args.precision != 'fp32'), dtype=dtype):
+                    outputs = model(input_ids=input_ids, labels=labels)
+                    loss = outputs.loss
+                
+                # Check loss finiteness (still useful)
                 if torch.isnan(loss) or torch.isinf(loss):
-                    logging.error(f"NaN or Inf loss detected at Micro-step {global_micro_batch_step} (but hooks didn't catch it?). Loss: {loss.item()}")
+                    logging.error(f"NaN or Inf loss detected at Micro-step {global_micro_batch_step} BEFORE backward(). Loss: {loss.item()}")
                     if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1)
-                    raise ValueError(f"NaN or Inf loss detected AFTER forward pass at Opt Step {global_optimizer_step}")
+                    raise ValueError(f"NaN or Inf loss detected BEFORE backward() at Opt Step {global_optimizer_step}")
 
                 normalized_loss = loss / args.gradient_accumulation_steps
                 scaler.scale(normalized_loss).backward() # detect_anomaly will monitor this
                 
                 accumulated_loss_for_opt_step += loss.item() 
-                # ... rest of micro-step logic (logging, incrementing step) ...
-
                 global_micro_batch_step += 1
 
                 # Optimizer step check
@@ -623,19 +559,12 @@ def train(args: argparse.Namespace):
                  logging.info(f"Saved model to {current_epoch_model_path}")
 
     except RuntimeError as e:
-        # Check if it's the hook error or detect_anomaly error
-        if "Non-finite output detected in layer" in str(e):
-            logging.error("Forward pass hook detected non-finite value. See details above.", exc_info=False) # Error already logged by hook
-        elif "Function '.*' returned nan values in its 0th output." in str(e) or \
+        # Check if it's detect_anomaly error
+        if "Function '.*' returned nan values in its 0th output." in str(e) or \
              "returned NULL output" in str(e):
             logging.error("torch.autograd.detect_anomaly triggered! See traceback for the operation causing NaN/Inf gradients.", exc_info=True)
         else:
              logging.exception("An unexpected RuntimeError occurred during the training loop.") 
-        if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1) 
-        # Don't re-raise the hook error if we got the info, maybe? Or re-raise to halt.
-        raise # Re-raise to halt execution
-    except Exception as e: # Catch other exceptions
-        logging.exception("An error occurred during the training loop.")
         if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1) 
         raise 
 
