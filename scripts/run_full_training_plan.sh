@@ -11,9 +11,9 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # --- Configuration based on EXPERIMENT_PLAN.md Section 4 --- 
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped" # Model config for random init
 BATCH_SIZE=256           # Global batch size
-LEARNING_RATE=2e-5       # Peak learning rate
+LEARNING_RATE=5e-6       # Peak learning rate (Reduced from 2e-5)
 LR_SCHEDULE_TYPE="cosine" # Cosine decay
-NUM_WARMUP_STEPS=2000    # Warm-up steps (Restored from 0, was 1000 originally)
+NUM_WARMUP_STEPS=500    # Warm-up steps (Reduced from 2000)
 WEIGHT_DECAY=0.1         # Weight decay
 # EPOCHS=12              # Deprecated by token budget / max_steps
 TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
