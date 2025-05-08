@@ -25,7 +25,7 @@ from torch.cuda.amp import GradScaler, autocast # For mixed precision
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from random_window_dataset import RandomWindowDataset, DEFAULT_PREPROCESSED_DIR, EFFECTIVE_WINDOW_SIZE # noqa
+from random_window_dataset import RandomWindowDataset, DEFAULT_PREPROCESSED_DIR # noqa
 # from fetch_arxiv import TOKENIZER_NAME # We'll define tokenizer name directly for now or get from args
 
 # Define the 11 target categories from EXPERIMENT_PLAN.md
