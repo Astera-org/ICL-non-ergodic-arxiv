@@ -276,15 +276,23 @@ def train(args: argparse.Namespace):
     if val_dataloader:
         logging.info(f"Validation dataset size: {len(val_dataset)} (num batches per epoch: {len(val_dataloader)})")
 
-    # 3. Load Model and Tokenizer
-    logging.info(f"Loading model and tokenizer: {args.model_name_or_path}")
+    # 3. Load Model
+    logging.info(f"Loading model: {args.model_name_or_path}")
     logging.info(f"Initializing model from config: {args.model_name_or_path} (random initialization).")
     config = AutoConfig.from_pretrained(args.model_name_or_path)
+    if args.precision == 'fp32':
+        config.torch_dtype = torch.float32
+        logging.info("Set config.torch_dtype to torch.float32 for true fp32 precision based on args.precision.")
+    
     model = AutoModelForCausalLM.from_config(config)
     
     device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     logging.info(f"Using device: {device}")
     model.to(device)
+
+    if args.precision == 'fp32':
+        model = model.float() # Ensure all parameters are fp32
+        logging.info("Called model.float() to ensure all parameters are fp32.")
 
     # --- Initial/Manual Embedding Weight Init & Check ---
     try:
@@ -548,7 +556,7 @@ def train(args: argparse.Namespace):
                     with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16 if args.precision == "bf16" else torch.float16):
                         outputs = model(input_ids=batch_input_ids, labels=batch_target_ids) # Pass labels for internal loss calc
                         loss = outputs.loss
-                else: # fp32 or CPU
+                else: # fp32 or CPU (autocast context is not used for fp32)
                     outputs = model(input_ids=batch_input_ids, labels=batch_target_ids) # Pass labels for internal loss calc
                     # Check for NaN/Inf in logits before loss calculation
                     if not torch.isfinite(outputs.logits).all():
@@ -559,9 +567,13 @@ def train(args: argparse.Namespace):
                         problematic_dir.mkdir(exist_ok=True)
                         torch.save(batch_input_ids, problematic_dir / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.pt")
                         torch.save(batch_target_ids, problematic_dir / f"problematic_target_ids_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.pt")
-                        current_args_dict = vars(args)
+                        # Fix for PosixPath JSON serialization
+                        current_args_dict_serializable = vars(args).copy()
+                        for key, value in current_args_dict_serializable.items():
+                            if isinstance(value, Path):
+                                current_args_dict_serializable[key] = str(value)
                         with open(problematic_dir / f"problematic_run_args_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.json", "w") as f:
-                            json.dump(current_args_dict, f, indent=4)
+                            json.dump(current_args_dict_serializable, f, indent=4)
                         logging.info(f"Saved problematic batch input_ids, target_ids, and args to {problematic_dir}")
 
                         nan_inf_mask = ~torch.isfinite(outputs.logits)
@@ -596,9 +608,13 @@ def train(args: argparse.Namespace):
                         problematic_dir.mkdir(exist_ok=True)
                         torch.save(batch_input_ids, problematic_dir / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.pt")
                         torch.save(batch_target_ids, problematic_dir / f"problematic_target_ids_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.pt")
-                        current_args_dict = vars(args)
+                        # Fix for PosixPath JSON serialization
+                        current_args_dict_serializable = vars(args).copy()
+                        for key, value in current_args_dict_serializable.items():
+                            if isinstance(value, Path):
+                                current_args_dict_serializable[key] = str(value)
                         with open(problematic_dir / f"problematic_run_args_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.json", "w") as f:
-                            json.dump(current_args_dict, f, indent=4)
+                            json.dump(current_args_dict_serializable, f, indent=4)
                         logging.info(f"Saved batch data due to NaN loss (logits were finite) to {problematic_dir}")
 
                     raise ValueError(f"NaN or Inf loss detected BEFORE backward() at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step}")
@@ -606,48 +622,54 @@ def train(args: argparse.Namespace):
                 loss = loss / args.gradient_accumulation_steps # Normalize loss for accumulation
                 
                 # --- Backward pass with scaler for mixed precision ---
-                scaler.scale(loss).backward() # detect_anomaly will monitor this if enabled
+                # For fp32, GradScaler is a no-op, so scaler.scale(loss) is just loss.
+                # GradScaler should only be used if args.precision == 'fp16'.
+                # However, the existing code uses it for bf16 as well, which is incorrect.
+                # GradScaler is only for fp16. For bf16, no scaler is needed, just autocast.
+                # For fp32, neither autocast nor scaler.
+
+                # Corrected logic for backward pass based on precision:
+                if args.precision == 'fp16':
+                    scaler.scale(loss).backward()
+                elif args.precision == 'bf16': # Autocast handles bf16, no scaler needed for backward
+                    loss.backward()
+                else: # fp32
+                    loss.backward()
                 
-                accumulated_loss_for_opt_step += loss.item() # Accumulate *normalized* loss
-                # global_micro_batch_step will be incremented *after* this micro-batch's processing (optimizer step check)
+                accumulated_loss_for_opt_step += loss.item() 
                 
                 # Optimizer step check: True if (current_micro_batch_index_within_accumulation + 1) % N == 0
                 # global_micro_batch_step is 0-indexed for current accumulation cycle
                 if (global_micro_batch_step + 1) % args.gradient_accumulation_steps == 0:
-                    # --- Restore the original optimizer step logic --- 
                     
                     # Calculate norms based on accumulated gradients
                     total_norm_before_clip = 0
                     for p in model.parameters():
                         if p.grad is not None:
-                            # Check for NaN/Inf gradients before unscaling or clipping
                             if not torch.isfinite(p.grad.data).all():
                                 logging.error(f"NaN/Inf gradient detected for param before unscale/clip at Opt Step {global_optimizer_step}, Current Micro-batch index {global_micro_batch_step}")
-                                # To prevent further errors with norm calculation or clipping on non-finite grads:
                                 p.grad.data = torch.where(torch.isfinite(p.grad.data), p.grad.data, torch.zeros_like(p.grad.data))
                                 logging.warning("Replaced non-finite gradients with zeros for safety before norm calculation.")
                             param_norm = p.grad.data.norm(2)
                             total_norm_before_clip += param_norm.item() ** 2
                     total_norm_before_clip = total_norm_before_clip ** 0.5
                     
-                    # Add gradient clipping (Unscale grads first for fp16)
-                    scaler.unscale_(optimizer) # Unscale gradients before clipping for fp16
-                    clip_threshold = args.max_grad_norm # Use arg for max_grad_norm
+                    # Unscale gradients before clipping if using fp16 and scaler
+                    if args.precision == 'fp16':
+                        scaler.unscale_(optimizer) 
                     
-                    # Clip in-place, handling potential non-finite gradients if not already zeroed
-                    # error_if_nonfinite=False will skip norm check on non-finite parts, but they might persist if not zeroed above
-                    # Better to iterate and clip only if grad is finite
+                    clip_threshold = args.max_grad_norm 
                     for p in model.parameters():
                         if p.grad is not None and torch.isfinite(p.grad.data).all():
-                             torch.nn.utils.clip_grad_norm_(p, max_norm=clip_threshold) # Clip individual param grad if it's finite
-                        elif p.grad is not None: # Grad exists but is not finite
+                             torch.nn.utils.clip_grad_norm_(p, max_norm=clip_threshold) 
+                        elif p.grad is not None: 
                              logging.warning(f"Skipping clip_grad_norm_ for a parameter with non-finite gradient at Opt Step {global_optimizer_step}")
                     
-                    clip_hit = 1 if total_norm_before_clip > clip_threshold else 0 # This might be less accurate if individual clipping is used
+                    clip_hit = 1 if total_norm_before_clip > clip_threshold else 0
 
                     total_norm_after_clip = 0
                     for p in model.parameters():
-                        if p.grad is not None and torch.isfinite(p.grad.data).all(): # Recalculate only on finite grads
+                        if p.grad is not None and torch.isfinite(p.grad.data).all(): 
                             param_norm = p.grad.data.norm(2)
                             total_norm_after_clip += param_norm.item() ** 2
                         elif p.grad is not None and not torch.isfinite(p.grad.data).all():
@@ -655,27 +677,44 @@ def train(args: argparse.Namespace):
                     total_norm_after_clip = total_norm_after_clip ** 0.5
                     
                     # Optimizer step (using scaler for fp16)
-                    scaler.step(optimizer)
-                    scaler.update() # Update scaler for next iteration (for fp16)
-                    optimizer.zero_grad() # Reset gradients *after* optimizer step
+                    if args.precision == 'fp16':
+                        scaler.step(optimizer)
+                        scaler.update() 
+                    else: # bf16 or fp32
+                        optimizer.step()
+
+                    optimizer.zero_grad() 
                     
-                    global_optimizer_step += 1 # Increment global optimizer step count *after* it's done
+                    global_optimizer_step += 1 
+
+                    # --- Check weights after first optimizer step (moved here) ---
+                    if global_optimizer_step == 1: 
+                        logging.info(f"POST OPTIMIZER STEP 0 (current global_optimizer_step={global_optimizer_step}): Checking all model weights for finiteness.")
+                        all_weights_finite_after_step0 = True
+                        for name, param in model.named_parameters():
+                            if not torch.isfinite(param.data).all():
+                                logging.error(f"POST OPTIMIZER STEP 0: Parameter '{name}' HAS NON-FINITE weights! Shape: {param.shape}, Dtype: {param.dtype}")
+                                all_weights_finite_after_step0 = False
+                                non_finite_values = param.data[~torch.isfinite(param.data)]
+                                logging.error(f"POST OPTIMIZER STEP 0: Non-finite values in '{name}' (first 10): {non_finite_values.flatten()[:10].tolist()}")
+                        if all_weights_finite_after_step0:
+                            logging.info("POST OPTIMIZER STEP 0: All model weights are finite.")
+                        else:
+                            logging.error("POST OPTIMIZER STEP 0: NON-FINITE WEIGHTS DETECTED AFTER FIRST OPTIMIZER STEP!")
+                            # torch.save(model.state_dict(), output_dir_for_run / "model_state_after_first_opt_step_nan.pt")
+                            # raise RuntimeError("Non-finite weights after first optimizer step.")
+                    # --- End weight check ---
                     
                     current_lr = lr_scheduler.get_last_lr()[0] if num_total_training_steps > 0 else args.learning_rate
-                    
-                    # --- Timing --- 
                     current_time = time.time()
                     time_per_opt_step = current_time - last_opt_step_time
                     last_opt_step_time = current_time
+                    avg_loss_this_opt_step = accumulated_loss_for_opt_step # Already divided by grad_accum_steps
+                    accumulated_loss_for_opt_step = 0.0 
                     
-                    # --- Calculate Average Loss for Opt Step --- 
-                    avg_loss_this_opt_step = accumulated_loss_for_opt_step / args.gradient_accumulation_steps
-                    accumulated_loss_for_opt_step = 0.0 # Reset accumulator
-                    
-                    # --- Logging per Optimizer Step --- (This is the WandB part)
                     if not args.disable_wandb and num_total_training_steps > 0:
                         model_param_norm_current_step = torch.nn.utils.parameters_to_vector(
-                                                             [p.detach() for p in model.parameters() if torch.isfinite(p.detach()).all()] # Ensure finite params for norm
+                                                             [p.detach() for p in model.parameters() if torch.isfinite(p.detach()).all()] 
                                                          ).norm().item() if any(torch.isfinite(p.detach()).all() for p in model.parameters()) else float('nan')
                         
                         wandb_logs = {
@@ -685,8 +724,8 @@ def train(args: argparse.Namespace):
                             "epoch": epoch + 1,
                             "train/grad_norm_before_clip": total_norm_before_clip,
                             "train/grad_norm_after_clip": total_norm_after_clip,
-                            "train/clip_hit": clip_hit, # Log if clipping occurred
-                            "train/time_per_opt_step": time_per_opt_step, # Log step time
+                            "train/clip_hit": clip_hit, 
+                            "train/time_per_opt_step": time_per_opt_step, 
                             "train/model_param_norm_current_step": model_param_norm_current_step
                         }
                         wandb.log(wandb_logs)
@@ -695,12 +734,12 @@ def train(args: argparse.Namespace):
                     if global_optimizer_step % args.log_interval == 0 and num_total_training_steps > 0:
                         logging.info(f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Avg Loss: {avg_loss_this_opt_step:.4f}") 
                         logging.info(f"Gradient Norm (Opt Step): Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f} (Clip Hit: {clip_hit})")
-                        if 'model_param_norm_current_step' in locals(): 
+                        if 'model_param_norm_current_step' in locals() and not np.isnan(model_param_norm_current_step): 
                              logging.info(f"Model Parameter Norm (Opt Step): {model_param_norm_current_step:.4f}")
                         logging.info(f"Time per Opt Step: {time_per_opt_step:.2f}s")
                 
                     # Checkpointing based on optimizer steps
-                    if args.checkpoint_interval_steps > 0 and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0: # global_optimizer_step is now 1-indexed here
+                    if args.checkpoint_interval_steps > 0 and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0: 
                         step_checkpoint_path = step_checkpoints_dir / f"step_{global_optimizer_step}"
                         model.save_pretrained(step_checkpoint_path)
                         logging.info(f"Saved step-based checkpoint to {step_checkpoint_path} at optimizer step {global_optimizer_step}")
@@ -710,26 +749,14 @@ def train(args: argparse.Namespace):
                             if oldest_checkpoint.exists():
                                 shutil.rmtree(oldest_checkpoint)
                                 logging.info(f"Removed oldest step checkpoint: {oldest_checkpoint}")
-                    # --- End of restored optimizer step logic --- 
-            
-                global_micro_batch_step += 1 # Increment after current micro-batch is fully processed
-                # Reset micro_batch_step counter if an optimizer step was just performed
+                
+                global_micro_batch_step += 1 
                 if global_micro_batch_step >= args.gradient_accumulation_steps:
                     global_micro_batch_step = 0
 
             if training_complete: 
                 break 
             
-            # Log epoch average loss only if some training happened in this epoch
-            # Note: epoch_train_loss accumulates the *last* micro-batch loss, not the average
-            # This calculation might be less meaningful now. We could accumulate avg_loss_this_opt_step instead?
-            # Let's comment it out for now to avoid confusion, as optimizer-step avg loss is logged.
-            # if num_train_batches > 0: 
-            #     avg_epoch_train_loss = epoch_train_loss / num_train_batches
-            #     logging.info(f"Epoch {epoch+1} average training loss: {avg_epoch_train_loss:.4f}")
-            #     if not args.disable_wandb:
-            #         wandb.log({"train/epoch_avg_loss": avg_epoch_train_loss, "epoch": epoch + 1})
-
             # Perform validation at specified interval or at the end if budget not met by epoch end
             perform_eval = val_dataloader and \
                            ( (epoch + 1) % args.eval_interval == 0 or \
@@ -745,50 +772,45 @@ def train(args: argparse.Namespace):
                     logging.info(f"New best validation loss: {best_val_loss:.4f}. Saving model...")
                     best_model_path = output_dir_for_run / "best_model"
                     model.save_pretrained(best_model_path)
-                    # If a tokenizer were used and needed saving: tokenizer.save_pretrained(best_model_path)
                     logging.info(f"Saved best model to {best_model_path}")
                     if not args.disable_wandb:
                         wandb.summary["best_val_loss"] = best_val_loss
-            elif not val_dataloader and args.checkpoint_interval_steps == 0 and num_train_batches > 0: 
+            elif not val_dataloader and args.checkpoint_interval_steps == 0 and len(train_dataloader) > 0: # Check if train_dataloader is not empty 
                  logging.info(f"No validation loader and no step checkpointing. Saving model at end of epoch {epoch+1}.")
                  current_epoch_model_path = output_dir_for_run / f"model_epoch_{epoch+1}"
                  model.save_pretrained(current_epoch_model_path)
                  logging.info(f"Saved model to {current_epoch_model_path}")
 
     except RuntimeError as e:
-        # Check if it's detect_anomaly error
         if "Function '.*' returned nan values in its 0th output." in str(e) or \
-             "returned NULL output" in str(e):
+             "returned NULL output" in str(e): 
             logging.error("torch.autograd.detect_anomaly triggered! See traceback for the operation causing NaN/Inf gradients.", exc_info=True)
-        else:
+        else: 
              logging.exception("An unexpected RuntimeError occurred during the training loop.") 
         if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1) 
         raise 
 
     finally:
-        if hook_handle: # Ensure hook_handle was assigned
+        if hook_handle: 
             hook_handle.remove()
             logging.info("Removed embedding forward hook.")
-        nan_debug_info['hook_active'] = False # Ensure hook doesn't run if somehow training is re-entered (e.g. in a nested loop not shown)
+        nan_debug_info['hook_active'] = False 
 
-        # --- Disable anomaly detection --- 
         torch.autograd.set_detect_anomaly(False)
         logging.info("Disabled torch.autograd.detect_anomaly.")
-        # --- End disable --- 
         logging.info("Training loop finished or interrupted. Proceeding to final steps.")
         try:
-             # Save final model state regardless of loop completion reason (unless error stopped before model init)
              if 'model' in locals(): 
                  model.save_pretrained(final_saved_model_path)
                  logging.info(f"Saved final model state to {final_saved_model_path}")
              else:
                  logging.warning("Model variable not found, cannot save final model.")
-        except Exception as e_save: # More specific variable for exception during save
+        except Exception as e_save: 
              logging.error(f"Failed to save final model: {e_save}")
 
         if not args.disable_wandb and wandb.run is not None:
             logging.info("Finishing W&B run...")
-            exit_code = 0 if training_complete or ('epoch' in locals() and epoch == args.epochs -1) else 1 # Mark successful if loop completed naturally or hit budget
+            exit_code = 0 if training_complete or ('epoch' in locals() and epoch == args.epochs -1) else 1 
             wandb.finish(exit_code=exit_code)
             
         if args.upload_results_to_s3:
@@ -816,35 +838,31 @@ if __name__ == "__main__":
     parser.add_argument("-k", "--k", type=int, required=True, help="Number of categories to select for training (1 to 11).")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for category selection and training initialization.")
 
-    # Training hyperparameters (Original location)
+    # Training hyperparameters
     parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.") # Renamed help text
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.") # Updated help text
+    parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
-    # These are now primary definitions
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="AdamW beta1 parameter.")
     parser.add_argument("--adam_beta2", type=float, default=0.95, help="AdamW beta2 parameter.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon parameter.")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum norm for gradient clipping.")
-
-    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).") # Updated help text
+    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).")
     parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.")
-    parser.add_argument("--token_budget", type=int, default=0, help="Total number of tokens to train on. If >0, this primarily determines training duration. Default: 0 (use epochs).") # Added token budget here
-    # This was previously in a "Training Configuration" block, moved here for consolidation
+    parser.add_argument("--token_budget", type=int, default=0, help="Total number of tokens to train on. If >0, this primarily determines training duration. Default: 0 (use epochs).")
     parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for training samples.")
-
 
     # Dataloader and System
     parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
     parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
-    # This was previously in a "Precision" block, moved here
     parser.add_argument("--precision", type=str, default="bf16", choices=["fp32", "fp16", "bf16"], help="Training precision (bf16 recommended for A100).")
 
-
-    # Logging and Checkpointing (add more later)
-    parser.add_argument("--log_interval", type=int, default=100, help="Log training loss every N optimizer steps.") # Clarified help text
+    # Logging and Checkpointing
+    parser.add_argument("--log_interval", type=int, default=100, help="Log training loss every N optimizer steps.") 
     parser.add_argument("--eval_interval", type=int, default=1, help="Evaluate on validation set every N epochs (if validation data exists).")
+    parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N optimizer steps. 0 to disable step checkpointing. Checkpoints are saved only if global_optimizer_step > 0.") 
+    parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
 
     # W&B arguments
     parser.add_argument("--wandb_project", type=str, default="icl-non-ergodic-arxiv", help="Weights & Biases project name.")
@@ -852,43 +870,11 @@ if __name__ == "__main__":
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Custom run name for Weights & Biases.")
     parser.add_argument("--disable_wandb", action="store_true", help="Disable Weights & Biases logging.")
 
-    # New arguments for step-based checkpointing
-    parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N optimizer steps. 0 to disable step checkpointing. Checkpoints are saved only if global_optimizer_step > 0.") # Clarified help text
-    parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
-
     # S3 Upload arguments
     parser.add_argument("--upload_results_to_s3", action="store_true", help="Upload final results directory to S3.")
     parser.add_argument("--s3_results_bucket", type=str, default=None, help="S3 bucket name for uploading results.")
     parser.add_argument("--s3_results_prefix", type=str, default="training_runs/", help="S3 prefix (folder) for uploading results.")
-
-    # --- Training Configuration --- (Newer block, likely source of duplication)
-    # parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for training samples.") # Moved up
-    # Remove duplicate --epochs definition from here
-    # parser.add_argument("--epochs", type=int, default=3, help="Maximum number of epochs. If token_budget is set, training might stop earlier. If token_budget is 0, this determines total steps.") 
-    # Remove duplicate --batch_size definition (already above)
-    # parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.") 
-    # Remove duplicate --learning_rate definition (already above)
-    # parser.add_argument("--learning_rate", type=float, default=5e-5, help="Peak learning rate for AdamW optimizer.") 
-    # Remove duplicate --weight_decay definition (already above)
-    # parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.") 
-    # parser.add_argument("--adam_beta1", type=float, default=0.9, help="AdamW beta1 parameter.") # Moved up
-    # parser.add_argument("--adam_beta2", type=float, default=0.95, help="AdamW beta2 parameter.") # Moved up
-    # parser.add_argument("--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon parameter.") # Moved up
-    # parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum norm for gradient clipping.") # Moved up
-    # Remove duplicate --lr_scheduler_type definition (already above)
-    # parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="Type of learning rate scheduler (e.g., linear, cosine, constant).") 
-    # Remove duplicate --num_warmup_steps definition (already above)
-    # parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.") 
-    # Remove duplicate --gradient_accumulation_steps definition (already above)
-    # parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.") 
     
-    # --- Precision --- 
-    # parser.add_argument("--precision", type=str, default="bf16", choices=["fp32", "fp16", "bf16"], help="Training precision (bf16 recommended for A100).") # Moved up
-    
-    # Dataloader and System
-    # parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.") # Moved up
-    # parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.") # Moved up
-
     args = parser.parse_args()
 
     if not 1 <= args.k <= len(ALL_CATEGORIES):
