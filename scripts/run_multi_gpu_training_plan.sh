@@ -16,7 +16,7 @@ echo "Starting experiment run with timestamp: $EXPERIMENT_TIMESTAMP"
 # --- Configuration (adapted from run_full_training_plan.sh) ---
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
-LEARNING_RATE=4e-4       # From user's previous change
+LEARNING_RATE="0.0004"   # From user's previous change, now in decimal format for consistent dir naming
 LR_SCHEDULE_TYPE="cosine"
 NUM_WARMUP_STEPS=200
 WEIGHT_DECAY=0.01
@@ -214,11 +214,18 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                 
                 JOB_LOG_FILE="${SCRIPT_LOG_DIR}/run_k${k_val_to_launch}_seed${SEED_VAL}_gpu${gpu_id}.log"
                 
-                # Create a run-specific metadata link
-                RUN_METADATA_LINK="${LOCAL_TRAINING_OUTPUT_DIR}/k${k_val_to_launch}_seed${SEED_VAL}_${RUN_SUFFIX}/git_metadata.txt"
-                mkdir -p "$(dirname "$RUN_METADATA_LINK")"
-                cp "$METADATA_FILE" "$RUN_METADATA_LINK"
-                echo "Metadata linked to run directory for K=$k_val_to_launch"
+                # Construct the exact subdirectory name that train.py will use
+                # This includes learning rate, batch size, and the full run_suffix passed to train.py
+                TRAIN_PY_RUN_SUFFIX="${RUN_SUFFIX}_${EXPERIMENT_TIMESTAMP}"
+                TRAIN_PY_SUBDIR_NAME="k${k_val_to_launch}_seed${SEED_VAL}_lr${LEARNING_RATE}_bs${BATCH_SIZE}_${TRAIN_PY_RUN_SUFFIX}"
+                
+                # Define the path for the metadata file copy within the train.py output directory
+                RUN_METADATA_TARGET_PATH="${LOCAL_TRAINING_OUTPUT_DIR}/${TRAIN_PY_SUBDIR_NAME}/git_metadata.txt"
+                
+                # Ensure parent directory for metadata link exists (train.py will also create this, but mkdir -p is safe)
+                mkdir -p "$(dirname "$RUN_METADATA_TARGET_PATH")"
+                cp "$METADATA_FILE" "$RUN_METADATA_TARGET_PATH"
+                echo "Metadata copied to: $RUN_METADATA_TARGET_PATH"
                 
                 CMD=(
                   "python" "train.py"
@@ -245,15 +252,12 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--geom_beta" "$GEOM_BETA"
                   "--max_loss_ckpts" "$MAX_LOSS_CKPTS"
                   "--wandb_project" "$WANDB_PROJECT"
-                  # Add WANDB_ENTITY if it's set and not empty
-                  # Example: if [ -n "$WANDB_ENTITY" ]; then CMD+=("--wandb_entity" "$WANDB_ENTITY"); fi
-                  "--run_suffix" "${RUN_SUFFIX}_${EXPERIMENT_TIMESTAMP}" # Add timestamp to run suffix 
-                  "--output_dir" "$LOCAL_TRAINING_OUTPUT_DIR" # Base output for train.py, it will create k-specific subdirs
+                  "--run_suffix" "$TRAIN_PY_RUN_SUFFIX" # Pass the combined suffix
+                  "--output_dir" "$LOCAL_TRAINING_OUTPUT_DIR" 
                   "--upload_results_to_s3"
                   "--s3_results_bucket" "$S3_RESULTS_BUCKET"
                   "--s3_results_prefix" "$S3_RESULTS_PREFIX"
                 )
-                # Uncomment and fill if WANDB_ENTITY is used:
                 if [ -n "$WANDB_ENTITY" ]; then
                   CMD+=("--wandb_entity" "$WANDB_ENTITY")
                 fi
@@ -261,7 +265,6 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                 echo "Executing on GPU $gpu_id: ${CMD[@]}"
                 echo "Script log for this job: $JOB_LOG_FILE"
                 
-                # Launch in background
                 ( CUDA_VISIBLE_DEVICES=$gpu_id "${CMD[@]}" ) > "$JOB_LOG_FILE" 2>&1 &
                 
                 pids_on_gpu[$gpu_id]=$!
