@@ -94,6 +94,20 @@ def save_args(args: argparse.Namespace, output_dir: Path, run_name: str):
         json.dump(args_dict, f, indent=4)
     logging.info(f"Saved arguments to {args_path}")
 
+# --- GEOM CKPT SAVE ---
+def save_geom_ckpt(model, step, loss_val, loss_ckpt_dir, geom_saved_list, args_ref, wandb_ref, logging_ref, shutil_ref): # Pass dependencies
+    ckpt_path = loss_ckpt_dir / f"loss_{loss_val:.2f}_step{step:06d}"
+    model.save_pretrained(ckpt_path)
+    geom_saved_list.append(ckpt_path)
+    logging_ref.info(f"[GEOM] checkpoint @ step {step}  EMA={loss_val:.3f}")
+    if not args_ref.disable_wandb and wandb_ref.run is not None: # Check wandb.run
+        wandb_ref.log({"geom_ckpt_loss": loss_val, "geom_ckpt_step": step})
+    if args_ref.max_loss_ckpts > 0 and len(geom_saved_list) > args_ref.max_loss_ckpts:
+        oldest = geom_saved_list.pop(0)
+        shutil_ref.rmtree(oldest, ignore_errors=True)
+        logging_ref.info(f"[GEOM] removed oldest {oldest}")
+# -----------------------
+
 def upload_directory_to_s3(local_directory: Path, bucket: str, s3_prefix: str):
     """Uploads the contents of a local directory to S3.
 
@@ -176,6 +190,16 @@ def train(args: argparse.Namespace):
     step_checkpoints_dir = output_dir_for_run / "step_checkpoints"
     if args.checkpoint_interval_steps > 0:
         step_checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- GEOM CKPT STATE ---
+    loss_ckpt_dir = output_dir_for_run / "loss_checkpoints"
+    loss_ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    geom_ema   = None        # running EMA of train loss
+    geom_last  = None        # EMA at last checkpoint
+    geom_saved = []          # list of Path objects for rolling deletion
+    alpha, beta = args.geom_alpha, args.geom_beta
+    # ------------------------
 
     setup_logging(output_dir_for_run, run_name_base)
     save_args(args, output_dir_for_run, run_name_base)
@@ -713,6 +737,16 @@ def train(args: argparse.Namespace):
                     avg_loss_this_opt_step = accumulated_loss_for_opt_step # Already divided by grad_accum_steps
                     accumulated_loss_for_opt_step = 0.0 
                     
+                    # --- GEOM CKPT UPDATE ---
+                    geom_ema = (avg_loss_this_opt_step if geom_ema is None
+                                else beta * geom_ema + (1 - beta) * avg_loss_this_opt_step)
+
+                    if geom_last is None or geom_ema <= alpha * geom_last:
+                        # Pass necessary dependencies to save_geom_ckpt
+                        save_geom_ckpt(model, global_optimizer_step, geom_ema, loss_ckpt_dir, geom_saved, args, wandb, logging, shutil)
+                        geom_last = geom_ema
+                    # ------------------------
+                    
                     if not args.disable_wandb and num_total_training_steps > 0:
                         model_param_norm_current_step = torch.nn.utils.parameters_to_vector(
                                                              [p.detach() for p in model.parameters() if torch.isfinite(p.detach()).all()] 
@@ -864,6 +898,11 @@ if __name__ == "__main__":
     parser.add_argument("--eval_interval", type=int, default=1, help="Evaluate on validation set every N epochs (if validation data exists).")
     parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N optimizer steps. 0 to disable step checkpointing. Checkpoints are saved only if global_optimizer_step > 0.") 
     parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
+
+    # Geometric loss checkpoint arguments
+    parser.add_argument("--geom_alpha", type=float, default=0.90, help="Save checkpoint when EMA of train loss <= alpha * last-saved EMA.")
+    parser.add_argument("--geom_beta", type=float, default=0.95, help="EMA smoothing constant for geometric loss checkpointing.")
+    parser.add_argument("--max_loss_ckpts", type=int, default=20, help="Maximum number of geometric loss-based checkpoints to keep. 0 for unlimited.")
 
     # W&B arguments
     parser.add_argument("--wandb_project", type=str, default="icl-non-ergodic-arxiv", help="Weights & Biases project name.")

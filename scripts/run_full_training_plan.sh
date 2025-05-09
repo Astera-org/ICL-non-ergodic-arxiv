@@ -28,6 +28,11 @@ TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
 CHECKPOINT_INTERVAL=10000 # Save checkpoint every N steps
 MAX_CHECKPOINTS=12        # Max checkpoints to keep
 
+# Geometric Loss Checkpoint Configuration
+GEOM_ALPHA=0.90           # EMA train loss ratio for saving
+GEOM_BETA=0.95            # EMA smoothing constant
+MAX_LOSS_CKPTS=0         # Max geometric loss checkpoints to keep (0 for unlimited)
+
 # W&B Configuration
 WANDB_PROJECT="icl-non-ergodic-arxiv" # Default project name
 # WANDB_ENTITY="your_entity"     # Optional: Your W&B username or team
@@ -85,7 +90,11 @@ for k_val in "${K_VALUES[@]}"; do
       # Add S3 upload arguments
       "--upload_results_to_s3" \
       "--s3_results_bucket" "obelisk-simplex" \
-      "--s3_results_prefix" "non-ergodic-arxiv/training_runs"
+      "--s3_results_prefix" "non-ergodic-arxiv/training_runs" \
+      # Add Geometric Loss Checkpoint arguments
+      "--geom_alpha" "$GEOM_ALPHA" \
+      "--geom_beta" "$GEOM_BETA" \
+      "--max_loss_ckpts" "$MAX_LOSS_CKPTS"
       # Add --force_cpu if needed, otherwise defaults to GPU if available
     )
     
