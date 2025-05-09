@@ -95,13 +95,60 @@ def save_args(args: argparse.Namespace, output_dir: Path, run_name: str):
     logging.info(f"Saved arguments to {args_path}")
 
 # --- GEOM CKPT SAVE ---
-def save_geom_ckpt(model, step, loss_val, loss_ckpt_dir, geom_saved_list, args_ref, wandb_ref, logging_ref, shutil_ref): # Pass dependencies
+def save_geom_ckpt(model, step, loss_val, loss_ckpt_dir, geom_saved_list, args_ref, wandb_ref, logging_ref, shutil_ref, 
+                   val_dataloader, device_ref, current_epoch_idx, evaluate_fn, 
+                   geom_xs, geom_ys_list, geom_keys): # Pass plot data lists
     ckpt_path = loss_ckpt_dir / f"loss_{loss_val:.2f}_step{step:06d}"
     model.save_pretrained(ckpt_path)
     geom_saved_list.append(ckpt_path)
     logging_ref.info(f"[GEOM] checkpoint @ step {step}  EMA={loss_val:.3f}")
-    if not args_ref.disable_wandb and wandb_ref.run is not None: # Check wandb.run
-        wandb_ref.log({"geom_ckpt_loss": loss_val, "geom_ckpt_step": step})
+    
+    # Log the training EMA loss that triggered this checkpoint
+    if not args_ref.disable_wandb and wandb_ref.run is not None:
+        wandb_ref.log({
+            "train/geom_ema_loss_at_ckpt": loss_val, 
+            "train/geom_optimizer_step_at_ckpt": step    
+        })
+
+    # Evaluate on validation set if available
+    if val_dataloader is not None:
+        logging_ref.info(f"[GEOM] Evaluating on validation set at step {step} (epoch {current_epoch_idx+1}) due to geometric checkpoint, calculating per-token loss.")
+        # The `evaluate_fn` is the existing `evaluate` function.
+        geom_overall_eval_loss, geom_per_token_eval_losses = evaluate_fn(model, val_dataloader, device_ref, current_epoch_idx, args_ref, calculate_per_token_loss=True)
+        
+        logging_ref.info(f"[GEOM] Overall validation loss at step {step}: {geom_overall_eval_loss:.4f}")
+        if not args_ref.disable_wandb and wandb_ref.run is not None:
+            wandb_log_payload = {
+                "eval/geom_val_loss_at_step": geom_overall_eval_loss,
+                "eval/geom_val_loss_optimizer_step": step,
+                "eval/geom_val_loss_epoch_context": current_epoch_idx + 1 
+            }
+            
+            if geom_per_token_eval_losses is not None:
+                logging_ref.info(f"[GEOM] Per-token validation losses calculated for step {step}.")
+                geom_ys_list.append(geom_per_token_eval_losses) # Append the new Y series
+                geom_keys.append(f"Step {step} | EMA {loss_val:.3f}")   # Append the key for this series
+                
+                # Ensure xs, ys_list, and keys are not empty and lengths match for line_series
+                if geom_xs and geom_ys_list and geom_keys and len(geom_ys_list) == len(geom_keys):
+                    try:
+                        wandb_ref.plot.line_series(
+                            xs=geom_xs,
+                            ys=geom_ys_list,
+                            keys=geom_keys,
+                            title="In-Context Loss Profile (Geometric Ckpts)",
+                            xname="Token Position in Context Window"
+                        )
+                        logging_ref.info(f"[GEOM] Logged in-context loss profile plot to W&B for step {step}.")
+                    except Exception as e_plot:
+                        logging_ref.error(f"[GEOM] Failed to log line_series plot to W&B: {e_plot}")
+                else:
+                    logging_ref.warning("[GEOM] Skipping line_series plot due to data mismatch or empty lists.")
+            else:
+                logging_ref.warning(f"[GEOM] Per-token validation losses were not returned for step {step}.")
+            
+            wandb_ref.log(wandb_log_payload)
+            
     if args_ref.max_loss_ckpts > 0 and len(geom_saved_list) > args_ref.max_loss_ckpts:
         oldest = geom_saved_list.pop(0)
         shutil_ref.rmtree(oldest, ignore_errors=True)
@@ -154,27 +201,84 @@ def upload_directory_to_s3(local_directory: Path, bucket: str, s3_prefix: str):
     else:
         logging.warning(f"Completed upload attempt to s3://{bucket}/{s3_prefix} with {num_uploaded} successes and {num_failed} failures.")
 
-def evaluate(model: AutoModelForCausalLM, dataloader: DataLoader, device: torch.device, current_epoch: int, args: argparse.Namespace) -> float:
+def evaluate(model: AutoModelForCausalLM, dataloader: DataLoader, device: torch.device, current_epoch: int, args: argparse.Namespace, calculate_per_token_loss: bool = False):
     """Evaluates the model on the given dataloader.
-    Returns average loss.
+    Returns average loss. If calculate_per_token_loss is True, also returns a list of per-token average losses.
     """
     model.eval()
     total_loss = 0
     num_batches = 0
+    
+    # For per-token loss calculation
+    # Initialize to full sequence_length as the plot x-axis is fixed
+    per_token_losses_sum = torch.zeros(args.sequence_length, device=device) if calculate_per_token_loss else None
+    per_token_counts = torch.zeros(args.sequence_length, device=device, dtype=torch.long) if calculate_per_token_loss else None
+    
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc=f"Epoch {current_epoch+1} Evaluating", leave=False):
+        for batch in tqdm(dataloader, desc=f"Epoch {current_epoch+1} Evaluating{' (calc per-token loss)' if calculate_per_token_loss else ''}", leave=False):
             input_ids = batch.to(device)
-            # For causal LM, the model handles shifting labels internally if `labels` are provided.
-            # If labels are not provided, it computes loss against shifted input_ids.
-            # Let's explicitly provide labels for clarity, same as input_ids.
             labels = input_ids 
             outputs = model(input_ids=input_ids, labels=labels)
-            total_loss += outputs.loss.item()
+            loss = outputs.loss 
+            total_loss += loss.item()
             num_batches += 1
+
+            if calculate_per_token_loss and per_token_losses_sum is not None and per_token_counts is not None:
+                # Logits for predicting the next token: outputs.logits is [batch_size, seq_len, vocab_size]
+                # Labels are input_ids. Loss is calculated for predicting input_ids[i+1] from input_ids[0...i]
+                # So, the loss for the token at labels[i] (0-indexed) is associated with logits output for position i-1.
+                # The model internally shifts logits relative to labels.
+                # outputs.logits are for *predicting* tokens input_ids[0]...input_ids[sequence_length-1]
+                # Let input_ids be [t0, t1, ..., t_N-1] where N is sequence_length.
+                # Logits for t0: outputs.logits[:, 0, :] (predicts t0, often from a BOS token or empty context, usually high loss or ignored)
+                # Logits for t1: outputs.logits[:, 1, :] (predicts t1 based on t0)
+                # ... 
+                # Logits for t_N-1: outputs.logits[:, N-1, :] (predicts t_N-1 based on t0...t_N-2)
+                
+                # We want loss for each position in the sequence_length. Standard Causal LM loss is on predicting tokens 1 to N.
+                # So, logits should be [batch, seq_len-1, vocab_size] and targets [batch, seq_len-1]
+                
+                logits_for_loss = outputs.logits[:, :-1, :].contiguous() # Input for predicting token 1 up to N (N-1 predictions in total)
+                targets_for_loss = input_ids[:, 1:].contiguous()       # Actual tokens 1 up to N
+                
+                if logits_for_loss.size(1) == 0: # Should not happen if seq_len > 1
+                    continue
+
+                loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
+                token_losses_flat = loss_fct(logits_for_loss.view(-1, logits_for_loss.size(-1)), 
+                                             targets_for_loss.view(-1))
+                
+                # Reshape to [batch_size, actual_prediction_len]
+                # actual_prediction_len is sequence_length - 1
+                actual_prediction_len = logits_for_loss.size(1)
+                token_losses_per_batch_item = token_losses_flat.view(input_ids.size(0), actual_prediction_len)
+                
+                # token_losses_per_batch_item[b,j] is the loss for predicting the (j+1)-th token of the input sequence.
+                # So j=0 is loss for predicting input_ids[b, 1], j=1 is loss for input_ids[b, 2] etc.
+                # We want to store this in per_token_losses_sum where index i means loss for predicting token i of original sequence.
+                # So, per_token_losses_sum[0] is loss for token 0 (often undefined/high)
+                # per_token_losses_sum[1] is loss for token 1 (using token_losses_per_batch_item[:, 0])
+                # per_token_losses_sum[i] is loss for token i (using token_losses_per_batch_item[:, i-1])
+
+                # Sum per-position losses across the batch
+                # Add to indices 1 to actual_prediction_len (inclusive) of per_token_losses_sum
+                per_token_losses_sum[1 : actual_prediction_len + 1] += token_losses_per_batch_item.sum(dim=0)
+                per_token_counts[1 : actual_prediction_len + 1] += input_ids.size(0) # Add batch_size for these positions
+
     avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
     if not args.disable_wandb:
+        # This logs the overall average validation loss for the epoch
         wandb.log({"eval/epoch_val_loss": avg_loss, "epoch": current_epoch + 1})
-    return avg_loss
+    
+    per_token_avg_losses_list = None
+    if calculate_per_token_loss and per_token_losses_sum is not None and per_token_counts is not None:
+        per_token_avg_losses_list = [float('nan')] * args.sequence_length # Initialize with NaNs
+        # Iterate from token position 1 up to sequence_length -1 (as token 0 is not predicted from prior context here)
+        for i in range(1, args.sequence_length):
+            if per_token_counts[i] > 0:
+                per_token_avg_losses_list[i] = (per_token_losses_sum[i] / per_token_counts[i]).item()
+            # else it remains NaN, which is fine for plotting missing data
+    return avg_loss, per_token_avg_losses_list
 
 def train(args: argparse.Namespace):
     """Main training function."""
@@ -199,6 +303,10 @@ def train(args: argparse.Namespace):
     geom_last  = None        # EMA at last checkpoint
     geom_saved = []          # list of Path objects for rolling deletion
     alpha, beta = args.geom_alpha, args.geom_beta
+    # For geometric checkpoint in-context loss plotting
+    geom_per_token_loss_xs = list(range(args.sequence_length)) 
+    geom_per_token_loss_ys_list = []
+    geom_per_token_loss_keys = []
     # ------------------------
 
     setup_logging(output_dir_for_run, run_name_base)
@@ -711,8 +819,10 @@ def train(args: argparse.Namespace):
                     if args.precision == 'fp16':
                         scaler.step(optimizer)
                         scaler.update() 
+                        current_grad_scaler_scale = scaler.get_scale() # Get scale factor
                     else: # bf16 or fp32
                         optimizer.step()
+                        current_grad_scaler_scale = float('nan') # Not applicable
 
                     optimizer.zero_grad() 
                     lr_scheduler.step() # Step the scheduler *after* the optimizer step
@@ -749,8 +859,11 @@ def train(args: argparse.Namespace):
                                 else beta * geom_ema + (1 - beta) * avg_loss_this_opt_step)
 
                     if geom_last is None or geom_ema <= alpha * geom_last:
-                        # Pass necessary dependencies to save_geom_ckpt
-                        save_geom_ckpt(model, global_optimizer_step, geom_ema, loss_ckpt_dir, geom_saved, args, wandb, logging, shutil)
+                        # Pass necessary dependencies to save_geom_ckpt, including eval components and plot data lists
+                        save_geom_ckpt(model, global_optimizer_step, geom_ema, loss_ckpt_dir, geom_saved, 
+                                       args, wandb, logging, shutil, 
+                                       val_dataloader, device, epoch, evaluate, # Eval components
+                                       geom_per_token_loss_xs, geom_per_token_loss_ys_list, geom_per_token_loss_keys) # Plot data
                         geom_last = geom_ema
                     # ------------------------
                     
@@ -770,15 +883,20 @@ def train(args: argparse.Namespace):
                             "train/time_per_opt_step": time_per_opt_step, 
                             "train/model_param_norm_current_step": model_param_norm_current_step
                         }
+                        if args.precision == 'fp16':
+                            wandb_logs["train/grad_scaler_scale"] = current_grad_scaler_scale
                         wandb.log(wandb_logs)
 
                     # Console logging at log_interval (based on optimizer steps)
                     if global_optimizer_step % args.log_interval == 0 and num_total_training_steps > 0:
-                        logging.info(f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Avg Loss: {avg_loss_this_opt_step:.4f}") 
-                        logging.info(f"Gradient Norm (Opt Step): Before Clip={total_norm_before_clip:.4f}, After Clip={total_norm_after_clip:.4f} (Clip Hit: {clip_hit})")
+                        log_msg = f"Epoch {epoch+1}, Opt Step {global_optimizer_step}/{num_total_training_steps}, LR {current_lr:.2e}, Avg Loss: {avg_loss_this_opt_step:.4f}"
+                        log_msg += f", Grad Norm (Before/After Clip): {total_norm_before_clip:.2f}/{total_norm_after_clip:.2f} (Hit: {clip_hit})"
                         if 'model_param_norm_current_step' in locals() and not np.isnan(model_param_norm_current_step): 
-                             logging.info(f"Model Parameter Norm (Opt Step): {model_param_norm_current_step:.4f}")
-                        logging.info(f"Time per Opt Step: {time_per_opt_step:.2f}s")
+                             log_msg += f", Model Norm: {model_param_norm_current_step:.2f}"
+                        if args.precision == 'fp16':
+                            log_msg += f", GradScaler Scale: {current_grad_scaler_scale:.0f}"
+                        log_msg += f", Time/OptStep: {time_per_opt_step:.2f}s"
+                        logging.info(log_msg)
                 
                     # Checkpointing based on optimizer steps
                     if args.checkpoint_interval_steps > 0 and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0: 
@@ -806,7 +924,8 @@ def train(args: argparse.Namespace):
             
             if perform_eval:
                 logging.info(f"Evaluating at end of epoch {epoch+1}...")
-                val_loss = evaluate(model, val_dataloader, device, epoch, args)
+                # Regular epoch-end evaluation doesn't need per-token losses for this specific plot
+                val_loss, _ = evaluate(model, val_dataloader, device, epoch, args, calculate_per_token_loss=False)
                 logging.info(f"Epoch {epoch+1} validation loss: {val_loss:.4f}")
 
                 if val_loss < best_val_loss:
