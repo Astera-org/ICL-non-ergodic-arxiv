@@ -11,7 +11,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # --- Configuration based on EXPERIMENT_PLAN.md Section 4 --- 
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped" # Model config for random init
 BATCH_SIZE=16           # Micro-batch size per device
-LEARNING_RATE=4e-4       # Peak learning rate (Scaled up with increased batch size; closer to Pythia's regime)
+LEARNING_RATE=2e-4       # Peak learning rate (Scaled up with increased batch size; closer to Pythia's regime)
 LR_SCHEDULE_TYPE="cosine" # More standard schedule, matches Pythia's type
 NUM_WARMUP_STEPS=200       # ~1% of new estimated total steps
 WEIGHT_DECAY=0.01        # Weight decay (Matches Pythia)
