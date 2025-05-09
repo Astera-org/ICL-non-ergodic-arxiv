@@ -9,9 +9,11 @@ if [ -f ".env" ]; then export $(grep -v '^#' .env | xargs); fi
 set -e # Exit immediately if a command exits with a non-zero status.
 set -o pipefail # Causes a pipeline to return the exit status of the last command in the pipe that returned a non-zero return value.
 
-echo "Debug: Script started, set -e and set -o pipefail are active."
+# --- Generate timestamp for this experiment run ---
+EXPERIMENT_TIMESTAMP=$(date "+%Y-%m-%d_%H-%M-%S")
+echo "Starting experiment run with timestamp: $EXPERIMENT_TIMESTAMP"
 
-# --- Configuration (adapted from run_full_training_plan.sh) --- 
+# --- Configuration (adapted from run_full_training_plan.sh) ---
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
 LEARNING_RATE=4e-4       # From user's previous change
@@ -38,7 +40,10 @@ WANDB_PROJECT="icl-non-ergodic-arxiv"
 # WANDB_ENTITY="" # Optional: Your W&B username or team. Uncomment and set if needed.
 
 # Local Output Directory Configuration
-LOCAL_TRAINING_OUTPUT_DIR="/data/users/adam/checkpoints" # Define the root for local outputs
+# Add the timestamp to local output directory
+LOCAL_TRAINING_OUTPUT_DIR="/data/users/adam/checkpoints/run_${EXPERIMENT_TIMESTAMP}" # Define the root for local outputs
+mkdir -p "$LOCAL_TRAINING_OUTPUT_DIR"
+echo "Local output directory: $LOCAL_TRAINING_OUTPUT_DIR"
 
 # Experiment Grid
 K_VALUES=(1 2 3 4 6 8 10 11) # Define K values to run
@@ -47,20 +52,106 @@ RUN_SUFFIX="multi_gpu_plan_seed0" # Suffix for this multi-GPU execution plan
 
 # S3 Configuration
 S3_RESULTS_BUCKET="obelisk-simplex" # Replace with your bucket if different
-S3_RESULTS_PREFIX="non-ergodic-arxiv/training_runs_multi_gpu" # Differentiated S3 path
+# Add the timestamp to S3 path
+S3_RESULTS_PREFIX="non-ergodic-arxiv/training_runs_multi_gpu/run_${EXPERIMENT_TIMESTAMP}" # Differentiated S3 path with timestamp
+echo "S3 results will be uploaded to: s3://${S3_RESULTS_BUCKET}/${S3_RESULTS_PREFIX}"
 
-# --- Multi-GPU Execution Logic --- 
+# --- Save Git Repository Metadata ---
+echo "Gathering git repository metadata..."
+
+# Create metadata directory
+METADATA_DIR="${LOCAL_TRAINING_OUTPUT_DIR}/metadata"
+mkdir -p "$METADATA_DIR"
+
+# Generate metadata filename
+METADATA_FILE="${METADATA_DIR}/git_metadata_${EXPERIMENT_TIMESTAMP}.txt"
+
+# Initialize the metadata file
+echo "# Git Repository Metadata" > "$METADATA_FILE"
+echo "# Generated at: $(date)" >> "$METADATA_FILE"
+echo "# Run configuration: K_VALUES=(${K_VALUES[@]}), SEED_VAL=$SEED_VAL" >> "$METADATA_FILE"
+echo "# Experiment Timestamp: $EXPERIMENT_TIMESTAMP" >> "$METADATA_FILE"
+echo "" >> "$METADATA_FILE"
+
+# Capture git information
+echo "## Git Information" >> "$METADATA_FILE"
+echo "Repository Root: $(pwd)" >> "$METADATA_FILE"
+
+# Check if git is available and the directory is a git repository
+if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null; then
+    # Get git remote URL
+    echo "Remote URL: $(git config --get remote.origin.url)" >> "$METADATA_FILE"
+    
+    # Get current branch
+    echo "Current Branch: $(git rev-parse --abbrev-ref HEAD)" >> "$METADATA_FILE"
+    
+    # Get current commit hash
+    echo "Commit Hash: $(git rev-parse HEAD)" >> "$METADATA_FILE"
+    
+    # Get commit date
+    echo "Commit Date: $(git log -1 --format=%cd)" >> "$METADATA_FILE"
+    
+    # Get commit message
+    echo "Commit Message: $(git log -1 --format=%s)" >> "$METADATA_FILE"
+    
+    # Check if working directory is clean
+    if git diff --quiet && git diff --staged --quiet; then
+        echo "Working Directory: Clean (no uncommitted changes)" >> "$METADATA_FILE"
+    else
+        echo "Working Directory: Dirty (has uncommitted changes)" >> "$METADATA_FILE"
+        
+        # Optionally capture the diff
+        echo "" >> "$METADATA_FILE"
+        echo "## Uncommitted Changes" >> "$METADATA_FILE"
+        echo '```diff' >> "$METADATA_FILE"
+        git diff >> "$METADATA_FILE"
+        echo '```' >> "$METADATA_FILE"
+    fi
+else
+    echo "Not a git repository or git command not available" >> "$METADATA_FILE"
+fi
+
+# Add W&B information to the metadata
+echo "" >> "$METADATA_FILE"
+echo "## W&B Configuration" >> "$METADATA_FILE"
+echo "WANDB_PROJECT: $WANDB_PROJECT" >> "$METADATA_FILE"
+if [ -n "$WANDB_ENTITY" ]; then
+    echo "WANDB_ENTITY: $WANDB_ENTITY" >> "$METADATA_FILE"
+else
+    echo "WANDB_ENTITY: Not specified (using default)" >> "$METADATA_FILE"
+fi
+if [ -n "$WANDB_API_KEY" ]; then
+    echo "WANDB_API_KEY: [REDACTED - Key is set]" >> "$METADATA_FILE"
+else
+    echo "WANDB_API_KEY: Not set in environment" >> "$METADATA_FILE"
+fi
+echo "W&B Run URLs: Will be available in individual run logs" >> "$METADATA_FILE"
+
+echo "" >> "$METADATA_FILE"
+echo "## Script Configuration" >> "$METADATA_FILE"
+echo "MODEL_NAME_OR_PATH: $MODEL_NAME_OR_PATH" >> "$METADATA_FILE"
+echo "BATCH_SIZE: $BATCH_SIZE" >> "$METADATA_FILE"
+echo "LEARNING_RATE: $LEARNING_RATE" >> "$METADATA_FILE"
+echo "LR_SCHEDULE_TYPE: $LR_SCHEDULE_TYPE" >> "$METADATA_FILE"
+echo "NUM_WARMUP_STEPS: $NUM_WARMUP_STEPS" >> "$METADATA_FILE"
+echo "WEIGHT_DECAY: $WEIGHT_DECAY" >> "$METADATA_FILE"
+echo "GRADIENT_ACCUMULATION_STEPS: $GRADIENT_ACCUMULATION_STEPS" >> "$METADATA_FILE"
+echo "SEQUENCE_LENGTH: $SEQUENCE_LENGTH" >> "$METADATA_FILE"
+echo "PRECISION: $PRECISION" >> "$METADATA_FILE"
+echo "TOKEN_BUDGET: $TOKEN_BUDGET" >> "$METADATA_FILE"
+echo "S3_RESULTS_BUCKET: $S3_RESULTS_BUCKET" >> "$METADATA_FILE"
+echo "S3_RESULTS_PREFIX: $S3_RESULTS_PREFIX" >> "$METADATA_FILE"
+
+echo "Metadata saved to $METADATA_FILE"
+
+# --- Multi-GPU Execution Logic ---
 echo "Starting multi-GPU training plan execution (Seed: $SEED_VAL)..."
-echo "Debug: About to determine number of GPUs..."
 
 set +e # Temporarily disable exit on error
 # 1. Determine number of GPUs
 NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -n 1)
 # NVIDIA_SMI_EXIT_CODE=$? # Capture exit code of the pipeline - Intentionally kept commented or removed if not strictly needed after fix.
 set -e # Re-enable exit on error
-
-echo "Debug: Raw NUM_GPUS_DETECTED: '$NUM_GPUS_DETECTED'"
-echo "Debug: NVIDIA_SMI_EXIT_CODE: $NVIDIA_SMI_EXIT_CODE"
 
 if ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then # This line might have been reverted by git pull, ensure it's the robust one
     echo "Warning: nvidia-smi failed or returned non-numeric/empty value ('$NUM_GPUS_DETECTED'). Assuming 1 GPU slot."
@@ -71,11 +162,10 @@ elif [[ "$NUM_GPUS_DETECTED" -eq 0 ]]; then
 else
     NUM_GPUS=$NUM_GPUS_DETECTED
 fi
-echo "Debug: Determined NUM_GPUS: $NUM_GPUS"
 echo "Will attempt to use $NUM_GPUS GPU slot(s) for parallel execution."
 
 # Create output directory for script logs if it doesn't exist
-SCRIPT_LOG_DIR="training_output/script_logs"
+SCRIPT_LOG_DIR="${LOCAL_TRAINING_OUTPUT_DIR}/script_logs"
 mkdir -p "$SCRIPT_LOG_DIR"
 echo "Main script logs for each K-value run will be stored in $SCRIPT_LOG_DIR"
 
@@ -85,7 +175,7 @@ K_VALUES_TO_RUN=("${K_VALUES[@]}") # Copy to a modifiable array for queueing
 # Associative array to store PIDs of jobs running on each GPU slot. Key: gpu_id, Value: pid
 declare -A pids_on_gpu
 # Associative array to store K value for the job on a GPU slot. Key: gpu_id, Value: k_val
-declare -A k_val_on_gpu 
+declare -A k_val_on_gpu
 
 # Initialize all GPU slots as free (pid 0)
 for (( i=0; i<$NUM_GPUS; i++ )); do
@@ -124,6 +214,12 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                 
                 JOB_LOG_FILE="${SCRIPT_LOG_DIR}/run_k${k_val_to_launch}_seed${SEED_VAL}_gpu${gpu_id}.log"
                 
+                # Create a run-specific metadata link
+                RUN_METADATA_LINK="${LOCAL_TRAINING_OUTPUT_DIR}/k${k_val_to_launch}_seed${SEED_VAL}_${RUN_SUFFIX}/git_metadata.txt"
+                mkdir -p "$(dirname "$RUN_METADATA_LINK")"
+                cp "$METADATA_FILE" "$RUN_METADATA_LINK"
+                echo "Metadata linked to run directory for K=$k_val_to_launch"
+                
                 CMD=(
                   "python" "train.py"
                   "--model_name_or_path" "$MODEL_NAME_OR_PATH"
@@ -151,16 +247,16 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--wandb_project" "$WANDB_PROJECT"
                   # Add WANDB_ENTITY if it's set and not empty
                   # Example: if [ -n "$WANDB_ENTITY" ]; then CMD+=("--wandb_entity" "$WANDB_ENTITY"); fi
-                  "--run_suffix" "$RUN_SUFFIX" 
+                  "--run_suffix" "${RUN_SUFFIX}_${EXPERIMENT_TIMESTAMP}" # Add timestamp to run suffix 
                   "--output_dir" "$LOCAL_TRAINING_OUTPUT_DIR" # Base output for train.py, it will create k-specific subdirs
                   "--upload_results_to_s3"
                   "--s3_results_bucket" "$S3_RESULTS_BUCKET"
                   "--s3_results_prefix" "$S3_RESULTS_PREFIX"
                 )
                 # Uncomment and fill if WANDB_ENTITY is used:
-                # if [ -n "$WANDB_ENTITY" ]; then
-                #   CMD+=("--wandb_entity" "$WANDB_ENTITY")
-                # fi
+                if [ -n "$WANDB_ENTITY" ]; then
+                  CMD+=("--wandb_entity" "$WANDB_ENTITY")
+                fi
 
                 echo "Executing on GPU $gpu_id: ${CMD[@]}"
                 echo "Script log for this job: $JOB_LOG_FILE"
@@ -185,7 +281,9 @@ echo "--------------------------------------------------"
 echo "All $total_k_to_process K-value training runs have completed."
 echo "Multi-GPU training plan execution finished."
 echo "Script logs for each launch command are in: $SCRIPT_LOG_DIR"
-echo "Individual \`train.py\` outputs and logs are in subdirectories under /data/users/adam/checkpoints/"
+echo "Individual \`train.py\` outputs and logs are in subdirectories under $LOCAL_TRAINING_OUTPUT_DIR"
+echo "Git repository metadata saved to: $METADATA_FILE"
+echo "S3 path: s3://${S3_RESULTS_BUCKET}/${S3_RESULTS_PREFIX}"
 echo "--------------------------------------------------"
 
 exit 0 
