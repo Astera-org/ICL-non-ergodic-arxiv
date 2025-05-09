@@ -9,6 +9,8 @@ if [ -f ".env" ]; then export $(grep -v '^#' .env | xargs); fi
 set -e # Exit immediately if a command exits with a non-zero status.
 set -o pipefail # Causes a pipeline to return the exit status of the last command in the pipe that returned a non-zero return value.
 
+echo "Debug: Script started, set -e and set -o pipefail are active."
+
 # --- Configuration (adapted from run_full_training_plan.sh) --- 
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
@@ -49,14 +51,14 @@ S3_RESULTS_PREFIX="non-ergodic-arxiv/training_runs_multi_gpu" # Differentiated S
 
 # --- Multi-GPU Execution Logic --- 
 echo "Starting multi-GPU training plan execution (Seed: $SEED_VAL)..."
+echo "Debug: About to determine number of GPUs..."
 
 # 1. Determine number of GPUs
 NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -n 1)
-echo "Debug: NUM_GPUS_DETECTED raw value: '$NUM_GPUS_DETECTED'"
+echo "Debug: Raw NUM_GPUS_DETECTED: '$NUM_GPUS_DETECTED'"
 
-# Check if NUM_GPUS_DETECTED is empty or not a number
-if [[ -z "$NUM_GPUS_DETECTED" ]] || ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then
-    echo "Warning: nvidia-smi failed, returned non-numeric value ('$NUM_GPUS_DETECTED'), or returned empty. Assuming 1 GPU slot."
+if ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then # This line might have been reverted by git pull, ensure it's the robust one
+    echo "Warning: nvidia-smi failed or returned non-numeric/empty value ('$NUM_GPUS_DETECTED'). Assuming 1 GPU slot."
     NUM_GPUS=1
 elif [[ "$NUM_GPUS_DETECTED" -eq 0 ]]; then
     echo "Warning: nvidia-smi reported 0 GPUs. Assuming 1 GPU slot (may run on CPU if no GPU 0 found by PyTorch)."
@@ -64,6 +66,7 @@ elif [[ "$NUM_GPUS_DETECTED" -eq 0 ]]; then
 else
     NUM_GPUS=$NUM_GPUS_DETECTED
 fi
+echo "Debug: Determined NUM_GPUS: $NUM_GPUS"
 echo "Will attempt to use $NUM_GPUS GPU slot(s) for parallel execution."
 
 # Create output directory for script logs if it doesn't exist
