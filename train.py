@@ -302,21 +302,28 @@ def train(args: argparse.Namespace):
 
     # 3. Load Model
     logging.info(f"Loading model: {args.model_name_or_path}")
-    logging.info(f"Initializing model from config: {args.model_name_or_path} (random initialization).")
     config = AutoConfig.from_pretrained(args.model_name_or_path)
-    if args.precision == 'fp32':
-        config.torch_dtype = torch.float32
-        logging.info("Set config.torch_dtype to torch.float32 for true fp32 precision based on args.precision.")
+    original_model_config_dtype = getattr(config, 'torch_dtype', None)
+
+    # For mixed precision (fp16, bf16) training with GradScaler (for fp16) or autocast alone (for bf16),
+    # the model's master parameters should be in float32.
+    # Autocast will then handle the execution of ops in the lower precision.
+    # For true fp32 training, parameters are also float32.
+    desired_param_dtype = torch.float32 
+
+    if original_model_config_dtype != desired_param_dtype:
+        logging.info(
+            f"Model config for {args.model_name_or_path} has torch_dtype={original_model_config_dtype}. "
+            f"Overriding to {desired_param_dtype} for parameter storage to ensure compatibility with mixed precision setup or for fp32 training."
+        )
+    config.torch_dtype = desired_param_dtype
     
+    logging.info(f"Initializing model from config for {args.model_name_or_path} with parameters to be stored in {config.torch_dtype} (random initialization).")
     model = AutoModelForCausalLM.from_config(config)
     
     device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     logging.info(f"Using device: {device}")
     model.to(device)
-
-    if args.precision == 'fp32':
-        model = model.float() # Ensure all parameters are fp32
-        logging.info("Called model.float() to ensure all parameters are fp32.")
 
     # --- Initial/Manual Embedding Weight Init & Check ---
     try:
