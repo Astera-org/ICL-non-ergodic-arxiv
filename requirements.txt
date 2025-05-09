@@ -7,4 +7,9 @@ pandas>=1.5.0
 tqdm>=4.60.0
 wandb>=0.15.0
 boto3>=1.28.0
-python-dotenv>=1.0.0 
+python-dotenv>=1.0.0
+matplotlib
+
+# For fetch_arxiv.py & potentially others, consider adding:
+# requests
+# feedparser 
