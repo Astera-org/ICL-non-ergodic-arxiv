@@ -53,9 +53,14 @@ S3_RESULTS_PREFIX="non-ergodic-arxiv/training_runs_multi_gpu" # Differentiated S
 echo "Starting multi-GPU training plan execution (Seed: $SEED_VAL)..."
 echo "Debug: About to determine number of GPUs..."
 
+set +e # Temporarily disable exit on error
 # 1. Determine number of GPUs
 NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -n 1)
+NVIDIA_SMI_EXIT_CODE=$? # Capture exit code of the pipeline
+set -e # Re-enable exit on error
+
 echo "Debug: Raw NUM_GPUS_DETECTED: '$NUM_GPUS_DETECTED'"
+echo "Debug: NVIDIA_SMI_EXIT_CODE: $NVIDIA_SMI_EXIT_CODE"
 
 if ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then # This line might have been reverted by git pull, ensure it's the robust one
     echo "Warning: nvidia-smi failed or returned non-numeric/empty value ('$NUM_GPUS_DETECTED'). Assuming 1 GPU slot."
