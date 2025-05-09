@@ -52,9 +52,11 @@ echo "Starting multi-GPU training plan execution (Seed: $SEED_VAL)..."
 
 # 1. Determine number of GPUs
 NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -n 1)
+echo "Debug: NUM_GPUS_DETECTED raw value: '$NUM_GPUS_DETECTED'"
 
-if ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then
-    echo "Warning: nvidia-smi failed or returned non-numeric value ('$NUM_GPUS_DETECTED'). Assuming 1 GPU slot."
+# Check if NUM_GPUS_DETECTED is empty or not a number
+if [[ -z "$NUM_GPUS_DETECTED" ]] || ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then
+    echo "Warning: nvidia-smi failed, returned non-numeric value ('$NUM_GPUS_DETECTED'), or returned empty. Assuming 1 GPU slot."
     NUM_GPUS=1
 elif [[ "$NUM_GPUS_DETECTED" -eq 0 ]]; then
     echo "Warning: nvidia-smi reported 0 GPUs. Assuming 1 GPU slot (may run on CPU if no GPU 0 found by PyTorch)."
