@@ -22,6 +22,10 @@ from botocore.exceptions import ClientError # Added for S3 error handling
 from torch.cuda.amp import GradScaler, autocast # For mixed precision
 import functools # For partial in hook lambda
 
+import matplotlib
+matplotlib.use('Agg') # Use a non-interactive backend for environments without a display
+import matplotlib.pyplot as plt
+
 # Add project root to sys.path to allow importing RandomWindowDataset
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -97,63 +101,108 @@ def save_args(args: argparse.Namespace, output_dir: Path, run_name: str):
 # --- GEOM CKPT SAVE ---
 def save_geom_ckpt(model, step, loss_val, loss_ckpt_dir, geom_saved_list, args_ref, wandb_ref, logging_ref, shutil_ref, 
                    val_dataloader, device_ref, current_epoch_idx, evaluate_fn, 
-                   geom_xs, geom_ys_list, geom_keys): # Pass plot data lists
+                   geom_xs, geom_ys_list, geom_keys, output_dir_for_run_ref): # Pass plot data lists and output_dir_for_run
     ckpt_path = loss_ckpt_dir / f"loss_{loss_val:.2f}_step{step:06d}"
     model.save_pretrained(ckpt_path)
     geom_saved_list.append(ckpt_path)
     logging_ref.info(f"[GEOM] checkpoint @ step {step}  EMA={loss_val:.3f}")
     
-    # Log the training EMA loss that triggered this checkpoint
+    # Log the training EMA loss that triggered this checkpoint to W&B
     if not args_ref.disable_wandb and wandb_ref.run is not None:
         wandb_ref.log({
             "train/geom_ema_loss_at_ckpt": loss_val, 
             "train/geom_optimizer_step_at_ckpt": step    
         })
 
-    # Evaluate on validation set if available
+    # Evaluate on validation set if available and save per-token loss data
     if val_dataloader is not None:
         logging_ref.info(f"[GEOM] Evaluating on validation set at step {step} (epoch {current_epoch_idx+1}) due to geometric checkpoint, calculating per-token loss.")
-        # The `evaluate_fn` is the existing `evaluate` function.
         geom_overall_eval_loss, geom_per_token_eval_losses = evaluate_fn(model, val_dataloader, device_ref, current_epoch_idx, args_ref, calculate_per_token_loss=True)
         
         logging_ref.info(f"[GEOM] Overall validation loss at step {step}: {geom_overall_eval_loss:.4f}")
+        
+        # Log overall validation loss to W&B
         if not args_ref.disable_wandb and wandb_ref.run is not None:
             wandb_log_payload = {
                 "eval/geom_val_loss_at_step": geom_overall_eval_loss,
                 "eval/geom_val_loss_optimizer_step": step,
                 "eval/geom_val_loss_epoch_context": current_epoch_idx + 1 
             }
+            wandb_ref.log(wandb_log_payload) # Log scalar validation metrics
+
+        # Save per-token loss data locally as JSON
+        if geom_per_token_eval_losses is not None:
+            logging_ref.info(f"[GEOM] Per-token validation losses calculated for step {step}.")
+            geom_ys_list.append(geom_per_token_eval_losses) # Append the new Y series
+            geom_keys.append(f"Step {step} | EMA {loss_val:.3f}")   # Append the key for this series
             
-            if geom_per_token_eval_losses is not None:
-                logging_ref.info(f"[GEOM] Per-token validation losses calculated for step {step}.")
-                geom_ys_list.append(geom_per_token_eval_losses) # Append the new Y series
-                geom_keys.append(f"Step {step} | EMA {loss_val:.3f}")   # Append the key for this series
+            plot_data_to_save = {
+                "xs": geom_xs,
+                "ys_list": geom_ys_list,
+                "keys": geom_keys,
+                "title": "In-Context Loss Profile (Geometric Ckpts)",
+                "xname": "Token Position in Context Window"
+            }
+            json_output_path = output_dir_for_run_ref / "in_context_loss_profiles.json"
+            try:
+                with open(json_output_path, 'w') as f:
+                    json.dump(plot_data_to_save, f, indent=4)
+                logging_ref.info(f"[GEOM] Saved in-context loss profile data to {json_output_path}")
                 
-                # Ensure xs, ys_list, and keys are not empty and lengths match for line_series
-                if geom_xs and geom_ys_list and geom_keys and len(geom_ys_list) == len(geom_keys):
-                    try:
-                        wandb_ref.plot.line_series(
-                            xs=geom_xs,
-                            ys=geom_ys_list,
-                            keys=geom_keys,
-                            title="In-Context Loss Profile (Geometric Ckpts)",
-                            xname="Token Position in Context Window"
-                        )
-                        logging_ref.info(f"[GEOM] Logged in-context loss profile plot to W&B for step {step}.")
-                    except Exception as e_plot:
-                        logging_ref.error(f"[GEOM] Failed to log line_series plot to W&B: {e_plot}")
-                else:
-                    logging_ref.warning("[GEOM] Skipping line_series plot due to data mismatch or empty lists.")
-            else:
-                logging_ref.warning(f"[GEOM] Per-token validation losses were not returned for step {step}.")
-            
-            wandb_ref.log(wandb_log_payload)
+                # Also generate and save a plot image
+                plot_image_path = output_dir_for_run_ref / "in_context_loss_profiles.png"
+                try:
+                    generate_loss_profile_plot(plot_data_to_save, plot_image_path, logging_ref)
+                except Exception as e_plot_save:
+                    logging_ref.error(f"[GEOM] Failed to generate/save loss profile plot image: {e_plot_save}")
+                    
+            except Exception as e_json_save:
+                logging_ref.error(f"[GEOM] Failed to save in-context loss profile data to JSON: {e_json_save}")
+        else:
+            logging_ref.warning(f"[GEOM] Per-token validation losses were not returned for step {step}, cannot save profile data.")
             
     if args_ref.max_loss_ckpts > 0 and len(geom_saved_list) > args_ref.max_loss_ckpts:
         oldest = geom_saved_list.pop(0)
         shutil_ref.rmtree(oldest, ignore_errors=True)
         logging_ref.info(f"[GEOM] removed oldest {oldest}")
 # -----------------------
+
+# --- Function to generate and save the loss profile plot ---
+def generate_loss_profile_plot(plot_data_dict, image_output_path, logging_ref):
+    """Generates a plot from the loss profile data and saves it as an image."""
+    try:
+        fig, ax = plt.subplots(figsize=(12, 7))
+        
+        xs = plot_data_dict.get("xs")
+        ys_list = plot_data_dict.get("ys_list", [])
+        keys = plot_data_dict.get("keys", [])
+        
+        if not xs or not ys_list:
+            logging_ref.warning("[PLOT] No data (xs or ys_list) to plot for loss profile.")
+            plt.close(fig)
+            return
+
+        for i, ys in enumerate(ys_list):
+            label = keys[i] if i < len(keys) else f"Series {i+1}"
+            # Ensure ys is a flat list of numbers, not nested lists or other structures if not intended
+            # Matplotlib expects y to be 1D array of the same new shape as x or 2D array with columns being plotted
+            ax.plot(xs, ys, label=label, marker='.', linestyle='-') # Added marker for better visibility of points
+            
+        ax.set_title(plot_data_dict.get("title", "In-Context Loss Profile"))
+        ax.set_xlabel(plot_data_dict.get("xname", "Token Position"))
+        ax.set_ylabel("Average Loss")
+        ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+        ax.legend(loc='best', fontsize='small') # Add a legend
+        
+        plt.tight_layout()
+        fig.savefig(image_output_path, dpi=150)
+        plt.close(fig) # Close the figure to free memory
+        logging_ref.info(f"[PLOT] Saved loss profile plot to {image_output_path}")
+    except Exception as e:
+        logging_ref.error(f"[PLOT] Error generating loss profile plot: {e}")
+        if 'fig' in locals() and fig is not None: # Ensure fig exists before trying to close
+            plt.close(fig)
+# ----------------------------------------------------------
 
 def upload_directory_to_s3(local_directory: Path, bucket: str, s3_prefix: str):
     """Uploads the contents of a local directory to S3.
@@ -859,11 +908,12 @@ def train(args: argparse.Namespace):
                                 else beta * geom_ema + (1 - beta) * avg_loss_this_opt_step)
 
                     if geom_last is None or geom_ema <= alpha * geom_last:
-                        # Pass necessary dependencies to save_geom_ckpt, including eval components and plot data lists
+                        # Pass necessary dependencies to save_geom_ckpt, including eval components, plot data lists, and output_dir_for_run
                         save_geom_ckpt(model, global_optimizer_step, geom_ema, loss_ckpt_dir, geom_saved, 
                                        args, wandb, logging, shutil, 
                                        val_dataloader, device, epoch, evaluate, # Eval components
-                                       geom_per_token_loss_xs, geom_per_token_loss_ys_list, geom_per_token_loss_keys) # Plot data
+                                       geom_per_token_loss_xs, geom_per_token_loss_ys_list, geom_per_token_loss_keys, # Plot data lists
+                                       output_dir_for_run) # Pass the run-specific output directory
                         geom_last = geom_ema
                     # ------------------------
                     
