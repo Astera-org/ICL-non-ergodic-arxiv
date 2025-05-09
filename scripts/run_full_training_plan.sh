@@ -21,7 +21,7 @@ ADAM_BETA1=0.9           # Adam Beta1
 ADAM_BETA2=0.95          # Adam Beta2
 ADAM_EPSILON=1e-8        # Adam Epsilon
 MAX_GRAD_NORM=1.0        # Matches Pythia, aids stability
-PRECISION="fp32"         # bf16 for A100
+PRECISION="fp16"         # Changed from fp32 to fp16 for H100 utilization
 # EPOCHS=12              # Deprecated by token budget / max_steps
 TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
 
