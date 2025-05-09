@@ -33,6 +33,9 @@ GEOM_ALPHA=0.90           # EMA train loss ratio for saving
 GEOM_BETA=0.95            # EMA smoothing constant
 MAX_LOSS_CKPTS=0         # Max geometric loss checkpoints to keep (0 for unlimited)
 
+# Local Output Directory Configuration
+LOCAL_TRAINING_OUTPUT_DIR="./training_output" # Define the root for local outputs
+
 # W&B Configuration
 WANDB_PROJECT="icl-non-ergodic-arxiv" # Default project name
 # WANDB_ENTITY="your_entity"     # Optional: Your W&B username or team
@@ -87,6 +90,7 @@ for k_val in "${K_VALUES[@]}"; do
       "--wandb_project" "$WANDB_PROJECT" \
       # Uncomment and set if needed: "--wandb_entity" "$WANDB_ENTITY" \
       "--run_suffix" "$RUN_SUFFIX" \
+      "--output_dir" "$LOCAL_TRAINING_OUTPUT_DIR" \
       # Add S3 upload arguments
       "--upload_results_to_s3" \
       "--s3_results_bucket" "obelisk-simplex" \

@@ -35,8 +35,11 @@ MAX_LOSS_CKPTS=0         # 0 for unlimited, from user's previous change
 WANDB_PROJECT="icl-non-ergodic-arxiv"
 # WANDB_ENTITY="" # Optional: Your W&B username or team. Uncomment and set if needed.
 
+# Local Output Directory Configuration
+LOCAL_TRAINING_OUTPUT_DIR="/data/users/adam/checkpoints" # Define the root for local outputs
+
 # Experiment Grid
-K_VALUES=(1 2 4 8 11) # Define K values to run
+K_VALUES=(1 2 3 4 6 8 10 11) # Define K values to run
 SEED_VAL=0            # Fixed seed for this plan
 RUN_SUFFIX="multi_gpu_plan_seed0" # Suffix for this multi-GPU execution plan
 
@@ -139,7 +142,7 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   # Add WANDB_ENTITY if it's set and not empty
                   # Example: if [ -n "$WANDB_ENTITY" ]; then CMD+=("--wandb_entity" "$WANDB_ENTITY"); fi
                   "--run_suffix" "$RUN_SUFFIX" 
-                  "--output_dir" "training_output" # Base output for train.py, it will create k-specific subdirs
+                  "--output_dir" "$LOCAL_TRAINING_OUTPUT_DIR" # Base output for train.py, it will create k-specific subdirs
                   "--upload_results_to_s3"
                   "--s3_results_bucket" "$S3_RESULTS_BUCKET"
                   "--s3_results_prefix" "$S3_RESULTS_PREFIX"
