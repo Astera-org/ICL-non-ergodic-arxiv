@@ -12,7 +12,7 @@ set -o pipefail # Causes a pipeline to return the exit status of the last comman
 # --- Configuration (adapted from run_full_training_plan.sh) --- 
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
-LEARNING_RATE=2e-4       # From user's previous change
+LEARNING_RATE=4e-4       # From user's previous change
 LR_SCHEDULE_TYPE="cosine"
 NUM_WARMUP_STEPS=200
 WEIGHT_DECAY=0.01
