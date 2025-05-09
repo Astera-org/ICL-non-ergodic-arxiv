@@ -56,7 +56,7 @@ echo "Debug: About to determine number of GPUs..."
 set +e # Temporarily disable exit on error
 # 1. Determine number of GPUs
 NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -n 1)
-NVIDIA_SMI_EXIT_CODE=$? # Capture exit code of the pipeline
+# NVIDIA_SMI_EXIT_CODE=$? # Capture exit code of the pipeline - Intentionally kept commented or removed if not strictly needed after fix.
 set -e # Re-enable exit on error
 
 echo "Debug: Raw NUM_GPUS_DETECTED: '$NUM_GPUS_DETECTED'"
@@ -185,7 +185,7 @@ echo "--------------------------------------------------"
 echo "All $total_k_to_process K-value training runs have completed."
 echo "Multi-GPU training plan execution finished."
 echo "Script logs for each launch command are in: $SCRIPT_LOG_DIR"
-echo "Individual `train.py` outputs and logs are in subdirectories under training_output/"
+echo "Individual \`train.py\` outputs and logs are in subdirectories under /data/users/adam/checkpoints/"
 echo "--------------------------------------------------"
 
 exit 0 
