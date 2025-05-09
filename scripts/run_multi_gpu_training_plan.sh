@@ -51,7 +51,7 @@ S3_RESULTS_PREFIX="non-ergodic-arxiv/training_runs_multi_gpu" # Differentiated S
 echo "Starting multi-GPU training plan execution (Seed: $SEED_VAL)..."
 
 # 1. Determine number of GPUs
-NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null)
+NUM_GPUS_DETECTED=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -n 1)
 
 if ! [[ "$NUM_GPUS_DETECTED" =~ ^[0-9]+$ ]]; then
     echo "Warning: nvidia-smi failed or returned non-numeric value ('$NUM_GPUS_DETECTED'). Assuming 1 GPU slot."
