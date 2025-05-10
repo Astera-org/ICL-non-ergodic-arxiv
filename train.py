@@ -535,12 +535,11 @@ def train(args: argparse.Namespace):
         # The 'num_training_steps' for the warmup scheduler should be set
         # such that it only covers the warmup period.
         warmup_scheduler = get_scheduler(
-            name="linear",  # Using linear for warmup
+            name="constant_with_warmup",  # Using constant_with_warmup
             optimizer=optimizer,
-            num_warmup_steps=args.num_warmup_steps,
-            num_training_steps=args.num_warmup_steps # Makes the scheduler "complete" after warmup steps
+            num_warmup_steps=args.num_warmup_steps
         )
-        logging.info(f"Warmup scheduler configured for {args.num_warmup_steps} steps.")
+        logging.info(f"Warmup scheduler configured for {args.num_warmup_steps} steps using constant_with_warmup.")
 
     # Main scheduler for after the warmup phase (if any)
     plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
