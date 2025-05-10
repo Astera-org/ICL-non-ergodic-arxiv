@@ -550,7 +550,7 @@ def train(args: argparse.Namespace):
         patience=args.reduce_lr_patience,
         threshold=args.early_stopping_delta, # Can reuse delta or define a specific threshold for LR reduction
         min_lr=args.min_lr,
-        verbose=True  # Logs a message when LR is reduced
+        #verbose=True  # Logs a message when LR is reduced
     )
     logging.info(f"ReduceLROnPlateau scheduler configured with factor={args.reduce_lr_factor}, patience={args.reduce_lr_patience}, min_lr={args.min_lr}.")
     # --- End New Scheduler Setup ---
@@ -1060,7 +1060,11 @@ if __name__ == "__main__":
     parser.add_argument("--ema_val_loss_alpha", type=float, default=0.1, help="Smoothing factor for Exponential Moving Average of validation loss. Smaller alpha = more smoothing.")
 
     # Dataloader and System
-    parser.add_argument("--num_workers", type=int, default=os.cpu_count() // 2 if os.cpu_count() else 1, help="Number of worker processes for DataLoader.")
+    parser.add_argument("--num_workers", type=int, default=2,
+                        help="Number of worker processes for DataLoader. Default: 2. "
+                             "A higher number might speed up data loading but can lead to "
+                             "'Too many open files' errors with frequent evaluations. "
+                             "Try 0 for single-process loading if issues persist.")
     parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
     parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Training precision (default: fp32). bf16 recommended for A100 if stable.")
 

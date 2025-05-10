@@ -42,6 +42,7 @@ EARLY_STOPPING_DELTA=0.0
 REDUCE_LR_FACTOR=0.5
 REDUCE_LR_PATIENCE=10
 MIN_LR=1e-6
+NUM_DATALOADER_WORKERS=2 # Number of workers for DataLoader
 
 # W&B Configuration
 WANDB_PROJECT="icl-non-ergodic-arxiv"
@@ -272,6 +273,7 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--reduce_lr_factor" "$REDUCE_LR_FACTOR"
                   "--reduce_lr_patience" "$REDUCE_LR_PATIENCE"
                   "--min_lr" "$MIN_LR"
+                  "--num_workers" "$NUM_DATALOADER_WORKERS"
                 )
                 if [ -n "$WANDB_ENTITY" ]; then
                   CMD+=("--wandb_entity" "$WANDB_ENTITY")
