@@ -23,7 +23,8 @@ ADAM_EPSILON=1e-8        # Adam Epsilon
 MAX_GRAD_NORM=1.0        # Matches Pythia, aids stability
 PRECISION="fp16"         # Changed from fp32 to fp16 for H100 utilization
 # EPOCHS=12              # Deprecated by token budget / max_steps
-TOKEN_BUDGET=2600000000  # Approx 100k steps * 256 batch * 101 tokens/seq
+# TOKEN_BUDGET=2600000000  # Removed, train.py does not use it.
+STEPS_PER_EVAL_EPOCH=100 # Number of optimizer steps per evaluation epoch
 
 CHECKPOINT_INTERVAL=10000 # Save checkpoint every N steps
 MAX_CHECKPOINTS=12        # Max checkpoints to keep
@@ -83,8 +84,8 @@ for k_val in "${K_VALUES[@]}"; do
       "--max_grad_norm" "$MAX_GRAD_NORM" \
       "--gradient_accumulation_steps" "$GRADIENT_ACCUMULATION_STEPS" \
       "--precision" "$PRECISION" \
-      "--token_budget" "$TOKEN_BUDGET" \
       "--epochs" "1000" \
+      "--steps_per_eval_epoch" "$STEPS_PER_EVAL_EPOCH" \
       "--checkpoint_interval_steps" "$CHECKPOINT_INTERVAL" \
       "--max_step_checkpoints" "$MAX_CHECKPOINTS" \
       "--wandb_project" "$WANDB_PROJECT" \

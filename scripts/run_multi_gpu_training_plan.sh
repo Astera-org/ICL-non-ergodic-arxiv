@@ -16,8 +16,8 @@ echo "Starting experiment run with timestamp: $EXPERIMENT_TIMESTAMP"
 # --- Configuration (adapted from run_full_training_plan.sh) ---
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
-LEARNING_RATE="0.0004"   # From user's previous change, now in decimal format for consistent dir naming
-LR_SCHEDULE_TYPE="cosine"
+LEARNING_RATE="0.0003"   # From user's previous change, now in decimal format for consistent dir naming
+# LR_SCHEDULE_TYPE="cosine" # Commented out as per request
 NUM_WARMUP_STEPS=200
 WEIGHT_DECAY=0.01
 GRADIENT_ACCUMULATION_STEPS=32
@@ -27,13 +27,21 @@ ADAM_BETA2=0.95
 ADAM_EPSILON=1e-8
 MAX_GRAD_NORM=1.0
 PRECISION="fp16"         # From user's previous change
-TOKEN_BUDGET=2600000000
-EPOCHS_FALLBACK=1000     # Fallback epochs if token budget isn't met by train.py
+# TOKEN_BUDGET=2600000000 # Commented out as per request
+MAX_EPOCHS_HARD_LIMIT=5000     # Renamed from EPOCHS_FALLBACK and value changed
+STEPS_PER_EVAL_EPOCH=100  # Number of optimizer steps per evaluation epoch (NEW)
 CHECKPOINT_INTERVAL=10000
 MAX_CHECKPOINTS=12
-GEOM_ALPHA=0.90
+GEOM_ALPHA=0.95
 GEOM_BETA=0.95
 MAX_LOSS_CKPTS=0         # 0 for unlimited, from user's previous change
+
+# New Parameters for Early Stopping and ReduceLROnPlateau
+EARLY_STOPPING_PATIENCE=30
+EARLY_STOPPING_DELTA=0.0
+REDUCE_LR_FACTOR=0.5
+REDUCE_LR_PATIENCE=10
+MIN_LR=1e-6
 
 # W&B Configuration
 WANDB_PROJECT="icl-non-ergodic-arxiv"
@@ -234,8 +242,8 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--seed" "$SEED_VAL"
                   "--batch_size" "$BATCH_SIZE"
                   "--sequence_length" "$SEQUENCE_LENGTH"
-                  "--learning_rate" "$LEARNING_RATE"
-                  "--lr_scheduler_type" "$LR_SCHEDULE_TYPE"
+                  "--learning_rate" "$LEARNING_RATE" # Initial LR
+                  # "--lr_scheduler_type" "$LR_SCHEDULE_TYPE" # Removed
                   "--num_warmup_steps" "$NUM_WARMUP_STEPS"
                   "--weight_decay" "$WEIGHT_DECAY"
                   "--adam_beta1" "$ADAM_BETA1"
@@ -244,8 +252,9 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--max_grad_norm" "$MAX_GRAD_NORM"
                   "--gradient_accumulation_steps" "$GRADIENT_ACCUMULATION_STEPS"
                   "--precision" "$PRECISION"
-                  "--token_budget" "$TOKEN_BUDGET"
-                  "--epochs" "$EPOCHS_FALLBACK"
+                  # "--token_budget" "$TOKEN_BUDGET" # Removed
+                  "--epochs" "$MAX_EPOCHS_HARD_LIMIT"
+                  "--steps_per_eval_epoch" "$STEPS_PER_EVAL_EPOCH" # NEW
                   "--checkpoint_interval_steps" "$CHECKPOINT_INTERVAL"
                   "--max_step_checkpoints" "$MAX_CHECKPOINTS"
                   "--geom_alpha" "$GEOM_ALPHA"
@@ -257,6 +266,12 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--upload_results_to_s3"
                   "--s3_results_bucket" "$S3_RESULTS_BUCKET"
                   "--s3_results_prefix" "$S3_RESULTS_PREFIX"
+                  # Added new arguments for early stopping and ReduceLROnPlateau
+                  "--early_stopping_patience" "$EARLY_STOPPING_PATIENCE"
+                  "--early_stopping_delta" "$EARLY_STOPPING_DELTA"
+                  "--reduce_lr_factor" "$REDUCE_LR_FACTOR"
+                  "--reduce_lr_patience" "$REDUCE_LR_PATIENCE"
+                  "--min_lr" "$MIN_LR"
                 )
                 if [ -n "$WANDB_ENTITY" ]; then
                   CMD+=("--wandb_entity" "$WANDB_ENTITY")
