@@ -236,6 +236,8 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                 cp "$METADATA_FILE" "$RUN_METADATA_TARGET_PATH"
                 echo "Metadata copied to: $RUN_METADATA_TARGET_PATH"
                 
+                EMA_VAL_LOSS_ALPHA=0.5
+
                 CMD=(
                   "python" "train.py"
                   "--model_name_or_path" "$MODEL_NAME_OR_PATH"
@@ -274,6 +276,7 @@ while [[ $completed_k_count -lt $total_k_to_process ]]; do
                   "--reduce_lr_patience" "$REDUCE_LR_PATIENCE"
                   "--min_lr" "$MIN_LR"
                   "--num_workers" "$NUM_DATALOADER_WORKERS"
+                  "--ema_val_loss_alpha" "$EMA_VAL_LOSS_ALPHA"
                 )
                 if [ -n "$WANDB_ENTITY" ]; then
                   CMD+=("--wandb_entity" "$WANDB_ENTITY")
