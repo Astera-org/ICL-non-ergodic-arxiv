@@ -10,7 +10,9 @@ if [ -f ".env" ]; then export $(grep -v '^#' .env | xargs); fi
 set -e # Exit immediately if a command exits with a non-zero status.
 set -o pipefail # Causes a pipeline to return the exit status of the last command in the pipe that returned a non-zero return value.
 
-# --- Generate timestamp for this experiment run ---\nEXPERIMENT_TIMESTAMP=$(date "+%Y-%m-%d_%H-%M-%S")
+# --- Generate timestamp for this experiment run ---
+EXPERIMENT_TIMESTAMP=$(date "+%Y-%m-%d_%H-%M-%S")
+echo "DEBUG: EXPERIMENT_TIMESTAMP is initially set to: [${EXPERIMENT_TIMESTAMP}]"
 echo "Starting final experiment run with timestamp: $EXPERIMENT_TIMESTAMP"
 
 # --- Configuration (adapted from run_multi_gpu_training_plan.sh) ---
@@ -48,25 +50,27 @@ WANDB_PROJECT="icl-non-ergodic-arxiv"
 # WANDB_ENTITY="" # Optional: Your W&B username or team. Uncomment and set if needed.
 
 # Local Output Directory Configuration
-LOCAL_TRAINING_OUTPUT_DIR_ROOT="/data/users/adam/checkpoints/final_runs" # Define the root for final runs
-LOCAL_TRAINING_OUTPUT_DIR="${LOCAL_TRAINING_OUTPUT_DIR_ROOT}/run_${EXPERIMENT_TIMESTAMP}"
-mkdir -p "$LOCAL_TRAINING_OUTPUT_DIR"
-echo "Local output directory for this run: $LOCAL_TRAINING_OUTPUT_DIR"
+LOCAL_TRAINING_OUTPUT_DIR_ROOT="/data/users/adam/checkpoints" # Changed to match old script's root
+# Ensure EXPERIMENT_TIMESTAMP is correctly defined and not empty here!
+LOCAL_OVERALL_RUN_DIR="${LOCAL_TRAINING_OUTPUT_DIR_ROOT}/run_${EXPERIMENT_TIMESTAMP}"
+mkdir -p "$LOCAL_OVERALL_RUN_DIR"
+echo "Overall output directory for this script execution: $LOCAL_OVERALL_RUN_DIR"
 
 # Experiment Grid
 K_VALUES_TO_ITERATE=(1 3 5 8 11) # Define K values to iterate over
 SEED_VALUES_TO_ITERATE=(1 2 3)   # Define SEED values to iterate over
-RUN_SUFFIX_BASE="final_multi_gpu"  # Base suffix for this final multi-GPU execution
+RUN_SUFFIX_BASE="final_multi_gpu"  # Base suffix for job-specific part, distinguishes from old "multi_gpu_plan_seed0"
 
 # S3 Configuration
 S3_RESULTS_BUCKET="obelisk-simplex"
-S3_RESULTS_PREFIX_ROOT="non-ergodic-arxiv/training_runs_final_multi_gpu" # Differentiated S3 path for final runs
-S3_RESULTS_PREFIX="${S3_RESULTS_PREFIX_ROOT}/run_${EXPERIMENT_TIMESTAMP}"
-echo "S3 results will be uploaded to: s3://${S3_RESULTS_BUCKET}/${S3_RESULTS_PREFIX}"
+S3_RESULTS_PREFIX_ROOT="non-ergodic-arxiv/training_runs" # Changed to match old script's S3 root structure
+# Ensure EXPERIMENT_TIMESTAMP is correctly defined and not empty here!
+S3_OVERALL_RUN_PREFIX="${S3_RESULTS_PREFIX_ROOT}/run_${EXPERIMENT_TIMESTAMP}"
+echo "S3 results root for this script execution: s3://${S3_RESULTS_BUCKET}/${S3_OVERALL_RUN_PREFIX}"
 
 # --- Save Git Repository Metadata for the entire run ---
 echo "Gathering git repository metadata for the entire final run..."
-METADATA_DIR="${LOCAL_TRAINING_OUTPUT_DIR}/metadata_overall"
+METADATA_DIR="${LOCAL_OVERALL_RUN_DIR}/metadata_overall"
 mkdir -p "$METADATA_DIR"
 METADATA_FILE="${METADATA_DIR}/git_metadata_final_run_${EXPERIMENT_TIMESTAMP}.txt"
 
@@ -130,9 +134,9 @@ else
 fi
 echo "Will use $NUM_GPUS GPU slot(s) for parallel execution."
 
-SCRIPT_LOG_DIR="${LOCAL_TRAINING_OUTPUT_DIR}/script_logs_per_run"
+SCRIPT_LOG_DIR="${LOCAL_OVERALL_RUN_DIR}/script_logs_per_job"
 mkdir -p "$SCRIPT_LOG_DIR"
-echo "Individual run script logs will be in $SCRIPT_LOG_DIR"
+echo "Individual job script logs will be in $SCRIPT_LOG_DIR"
 
 # --- Build the full list of (K, SEED) combinations ---
 JOBS_TO_RUN=()
@@ -182,35 +186,37 @@ while [[ $completed_job_count -lt $TOTAL_JOBS ]]; do
                 
                 JOB_LOG_FILE="${SCRIPT_LOG_DIR}/run_k${K_TO_LAUNCH}_seed${SEED_TO_LAUNCH}_gpu${gpu_id}.log"
                 
-                # Construct W&B run name and train.py output subdirectory name
-                # Ensure LEARNING_RATE is consistently formatted (e.g., no leading/trailing zeros if treated as string later)
+                # Construct W&B run name and train.py run_suffix
+                # This suffix will be used by train.py to create its own subdirectory within LOCAL_OVERALL_RUN_DIR
                 FORMATTED_LR=$(printf "%.0e" "$LEARNING_RATE" | sed 's/e+*0*/e/' | sed 's/e-0*/e-/') # e.g., 3e-4
-                
-                # Ensure unique run name for W&B and directory for train.py
-                # Include K, SEED, LR, BS, and a base suffix + overall experiment timestamp
-                TRAIN_PY_RUN_NAME="k${K_TO_LAUNCH}_s${SEED_TO_LAUNCH}_lr${FORMATTED_LR}_bs${BATCH_SIZE}_${RUN_SUFFIX_BASE}_${EXPERIMENT_TIMESTAMP}"
-                OUTPUT_SUBDIR_FOR_TRAIN_PY="${LOCAL_TRAINING_OUTPUT_DIR}/${TRAIN_PY_RUN_NAME}"
-                mkdir -p "$OUTPUT_SUBDIR_FOR_TRAIN_PY" # train.py will also create this, but good practice
+                # Matching the old structure with timestamp redundancy in the job-specific part too
+                JOB_SPECIFIC_RUN_SUFFIX="k${K_TO_LAUNCH}_s${SEED_TO_LAUNCH}_lr${FORMATTED_LR}_bs${BATCH_SIZE}_${RUN_SUFFIX_BASE}_${EXPERIMENT_TIMESTAMP}"
 
-                # Path for the specific run's copy of the overall metadata
-                RUN_METADATA_TARGET_PATH="${OUTPUT_SUBDIR_FOR_TRAIN_PY}/git_metadata_overall_run.txt"
-                cp "$METADATA_FILE" "$RUN_METADATA_TARGET_PATH"
-                echo "Overall metadata copied to: $RUN_METADATA_TARGET_PATH for this specific run."
+                # The actual output directory for train.py will be: ${LOCAL_OVERALL_RUN_DIR}/${JOB_SPECIFIC_RUN_SUFFIX}/
+                # train.py will create this final segment based on its --output_dir and --run_suffix.
 
-                EMA_VAL_LOSS_ALPHA=0.5 # This seems to be a leftover or specific to a version of train.py, check if still needed
+                # Path for the specific run's copy of the overall metadata (will go inside the job-specific dir)
+                # We need to ensure the parent of where train.py will create its dir exists for metadata copy, but train.py handles its own dir.
+                # For now, we'll just note where train.py *will* put its files.
+                # RUN_METADATA_TARGET_PATH="${LOCAL_OVERALL_RUN_DIR}/${JOB_SPECIFIC_RUN_SUFFIX}/git_metadata_overall_run.txt"
+                # cp "$METADATA_FILE" "$RUN_METADATA_TARGET_PATH" # This copy might be better done *after* train.py creates its dir, or train.py handles it.
+                # For now, let train.py handle its own output structure fully based on its output_dir and run_suffix.
 
-                # Ensure environment variables for W&B are available if set
-                WANDB_CMD_ENV=""
-                if [ -n "$WANDB_ENTITY" ]; then WANDB_CMD_ENV+="WANDB_ENTITY=$WANDB_ENTITY "; fi
-                # WANDB_API_KEY is usually handled by wandb login or system config, not passed directly in cmd normally
+                # Debug logs (ensure EXPERIMENT_TIMESTAMP is populated)
+                echo "DEBUG: About to run train.py. Variables:"
+                echo "DEBUG:   EXPERIMENT_TIMESTAMP = [${EXPERIMENT_TIMESTAMP}]"
+                echo "DEBUG:   LOCAL_OVERALL_RUN_DIR (passed as --output_dir to train.py) = [${LOCAL_OVERALL_RUN_DIR}]"
+                echo "DEBUG:   JOB_SPECIFIC_RUN_SUFFIX (passed as --run_suffix to train.py) = [${JOB_SPECIFIC_RUN_SUFFIX}]"
+                echo "DEBUG:   S3_OVERALL_RUN_PREFIX for this script run = [${S3_OVERALL_RUN_PREFIX}]"
+                echo "DEBUG:   S3 prefix for this specific train.py job = [${S3_OVERALL_RUN_PREFIX}/${JOB_SPECIFIC_RUN_SUFFIX}]"
                 
                 # Launch the training script in the background
                 (
                   echo "Starting train.py for K=$K_TO_LAUNCH, SEED=$SEED_TO_LAUNCH on GPU $gpu_id"
                   echo "Output logs will be in: $JOB_LOG_FILE"
-                  echo "Model checkpoints and run artifacts in: $OUTPUT_SUBDIR_FOR_TRAIN_PY"
+                  echo "Model checkpoints and run artifacts will be in subdirectories of: ${LOCAL_OVERALL_RUN_DIR}"
+                  echo "train.py will create: ${LOCAL_OVERALL_RUN_DIR}/${JOB_SPECIFIC_RUN_SUFFIX}/"
                   echo "Full command:"
-                  # Print the command for easier debugging
                   set -x # Echo commands
                   CUDA_VISIBLE_DEVICES=$gpu_id ${WANDB_CMD_ENV}python train.py \
                     --model_name_or_path "$MODEL_NAME_OR_PATH" \
@@ -232,7 +238,6 @@ while [[ $completed_job_count -lt $TOTAL_JOBS ]]; do
                     --checkpoint_interval_steps "$CHECKPOINT_INTERVAL" \
                     --max_step_checkpoints "$MAX_CHECKPOINTS" \
                     --max_loss_ckpts "$MAX_LOSS_CKPTS" \
-                    --geom_alpha "$GEOM_ALPHA" \
                     --geom_beta "$GEOM_BETA" \
                     --early_stopping_patience "$EARLY_STOPPING_PATIENCE" \
                     --early_stopping_delta "$EARLY_STOPPING_DELTA" \
@@ -240,12 +245,13 @@ while [[ $completed_job_count -lt $TOTAL_JOBS ]]; do
                     --reduce_lr_patience "$REDUCE_LR_PATIENCE" \
                     --min_lr "$MIN_LR" \
                     --num_workers "$NUM_DATALOADER_WORKERS" \
-                    --output_dir "$OUTPUT_SUBDIR_FOR_TRAIN_PY" \
+                    --output_dir "$LOCAL_OVERALL_RUN_DIR" \
+                    --run_suffix "$JOB_SPECIFIC_RUN_SUFFIX" \
                     --wandb_project "$WANDB_PROJECT" \
-                    --wandb_run_name "$TRAIN_PY_RUN_NAME" \
+                    --wandb_run_name "$JOB_SPECIFIC_RUN_SUFFIX" \
                     --upload_results_to_s3 \
                     --s3_bucket "$S3_RESULTS_BUCKET" \
-                    --s3_prefix "${S3_RESULTS_PREFIX}/${TRAIN_PY_RUN_NAME}" \
+                    --s3_prefix "${S3_OVERALL_RUN_PREFIX}/${JOB_SPECIFIC_RUN_SUFFIX}" \
                     --delete_local_checkpoints_after_s3_upload \
                     --num_best_ema_val_checkpoints 5 \
                     # --force_cpu # Ensure this is not set for GPU runs
@@ -274,13 +280,13 @@ done
 echo "--------------------------------------------------"
 echo "All $TOTAL_JOBS training jobs have been processed."
 echo "Final experiment run $EXPERIMENT_TIMESTAMP completed."
-echo "Check logs in $SCRIPT_LOG_DIR and $LOCAL_TRAINING_OUTPUT_DIR"
-echo "Check S3 at s3://${S3_RESULTS_BUCKET}/${S3_RESULTS_PREFIX}"
+echo "Check logs in $SCRIPT_LOG_DIR and $LOCAL_OVERALL_RUN_DIR"
+echo "Check S3 at s3://${S3_RESULTS_BUCKET}/${S3_OVERALL_RUN_PREFIX}"
 echo "--------------------------------------------------"
 
 # Optionally, upload the overall metadata and script logs to S3 as well
-OVERALL_ARTIFACTS_S3_PREFIX="${S3_RESULTS_PREFIX}/_overall_run_artifacts"
+OVERALL_ARTIFACTS_S3_PREFIX="${S3_OVERALL_RUN_PREFIX}/_overall_run_artifacts"
 echo "Uploading overall run artifacts (metadata, script logs) to s3://${S3_RESULTS_BUCKET}/${OVERALL_ARTIFACTS_S3_PREFIX}"
 aws s3 cp --recursive "$METADATA_DIR" "s3://${S3_RESULTS_BUCKET}/${OVERALL_ARTIFACTS_S3_PREFIX}/metadata_overall/"
-aws s3 cp --recursive "$SCRIPT_LOG_DIR" "s3://${S3_RESULTS_BUCKET}/${OVERALL_ARTIFACTS_S3_PREFIX}/script_logs_per_run/"
+aws s3 cp --recursive "$SCRIPT_LOG_DIR" "s3://${S3_RESULTS_BUCKET}/${OVERALL_ARTIFACTS_S3_PREFIX}/script_logs_per_job/"
 echo "Overall artifacts upload complete." 

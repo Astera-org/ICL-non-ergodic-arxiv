@@ -544,7 +544,7 @@ def train(args: argparse.Namespace):
 
     lr_scheduler = get_scheduler(
         name=args.lr_scheduler_type,
-        optimizer=optimizer,
+            optimizer=optimizer,
         num_warmup_steps=args.num_warmup_steps * args.gradient_accumulation_steps, # Scheduler steps are micro-steps if it depends on total steps
         num_training_steps=max_total_optimizer_steps * args.gradient_accumulation_steps # Scheduler steps are micro-steps
     )
@@ -706,7 +706,7 @@ def train(args: argparse.Namespace):
                 
                 if raw_val_loss is None or not np.isfinite(raw_val_loss): # Check for finite raw_val_loss
                     logging.warning(f"Validation loss is NaN or Inf at eval epoch {current_eval_epoch}. Skipping best model/early stopping/loss-checkpoint logic for this epoch.")
-                else:
+                    else:
                     # Update EMA of validation loss (for best_model checkpointing and ReduceLROnPlateau)
                     if best_ema_val_loss == float('inf'): # First validation
                         current_ema_val_loss = raw_val_loss
@@ -813,7 +813,7 @@ def train(args: argparse.Namespace):
                 plateau_scheduler.step(ema_val_loss_for_plateau_scheduler)
             elif not val_dataloader:
                 logging.debug("No validation dataloader, skipping ReduceLROnPlateau scheduler step.")
-            else:
+                else:
                 logging.warning("EMA validation loss is not finite, skipping ReduceLROnPlateau scheduler step.")
 
 
@@ -871,11 +871,11 @@ def train(args: argparse.Namespace):
                     logging.error(f"Could not reload and save best_model as final_model. Saving current model instead. Error: {e_reload_save}")
                     model.save_pretrained(final_model_path) # Fallback to current model
                     logging.info(f"Saved current model as final model to {final_model_path} (fallback).")
-            else:
+             else:
                 logging.warning(f"Early stopping triggered, but no best_model found at {best_model_path}. Saving current model as final.")
                 model.save_pretrained(final_model_path)
                 logging.info(f"Saved current model as final model to {final_model_path}")
-        else:
+                else:
             # If not stopped early, save the model at its current state
             logging.info("Saving final model (not due to early stopping).")
             model.save_pretrained(final_model_path)
@@ -968,7 +968,7 @@ if __name__ == "__main__":
     # Miscellaneous arguments
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
-    
+
     # W&B arguments
     parser.add_argument("--disable_wandb", action="store_true", help="Disable Weights & Biases logging.")
     parser.add_argument("--wandb_project", type=str, default="icl-non-ergodic-arxiv", help="Weights & Biases project name.")
@@ -981,7 +981,7 @@ if __name__ == "__main__":
     parser.add_argument("--s3_prefix", type=str, default=os.getenv("S3_RESULTS_PREFIX"), help="S3 prefix (folder path) for uploading results within the bucket.")
     parser.add_argument("--delete_local_checkpoints_after_s3_upload", action="store_true", help="Delete local step_checkpoints and loss_checkpoints directories after successful S3 upload to save space.")
 
-
+    
     args = parser.parse_args()
 
     # Further refine help text for clarity based on final decision for max_loss_ckpts
