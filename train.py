@@ -852,32 +852,44 @@ def train(args: argparse.Namespace):
         logging.info(f"Training finished. Total optimizer steps: {global_optimizer_step}. Total evaluation epochs: {current_eval_epoch}.")
         logging.info(f"Total training time: {training_duration_seconds:.2f} seconds ({training_duration_seconds/3600:.2f} hours).")
 
-        if not args.disable_wandb and wandb.run is not None:
-            wandb.summary["total_optimizer_steps_completed"] = global_optimizer_step
-            wandb.summary["total_eval_epochs_completed"] = current_eval_epoch
-            wandb.summary["training_duration_hours"] = training_duration_seconds / 3600
-            if "stopped_early" not in wandb.summary: # If not stopped early
-                 wandb.summary["stopped_early"] = False
+        # Ensure these are set only if W&B is active and summary is available
+        if not args.disable_wandb and wandb.run is not None and wandb.run.summary is not None:
+            try:
+                wandb.run.summary["total_optimizer_steps_completed"] = global_optimizer_step
+                wandb.run.summary["total_eval_epochs_completed"] = current_eval_epoch
+                wandb.run.summary["training_duration_hours"] = training_duration_seconds / 3600
+                # Use .get() to check before trying to assign if it doesn't exist
+                if wandb.run.summary.get("stopped_early") is None: # Check if key exists with .get()
+                    wandb.run.summary["stopped_early"] = False
+            except Exception as e_summary_update:
+                logging.warning(f"Failed to update wandb.summary at end of training: {e_summary_update}")
 
 
     except Exception as e:
         logging.error(f"Exception during training: {e}", exc_info=True) # Log traceback
-        if not args.disable_wandb and wandb.run is not None:
-            wandb.log({"error/training_exception": str(e)}, step=global_optimizer_step)
-            wandb.summary["training_crashed"] = True
-            wandb.summary["crash_message"] = str(e)
+        if not args.disable_wandb and wandb.run is not None and wandb.run.summary is not None:
+            try:
+                wandb.run.summary["training_crashed"] = True
+                wandb.run.summary["crash_message"] = str(e)
+            except Exception as e_crash_summary:
+                logging.warning(f"Failed to update wandb.summary on crash: {e_crash_summary}")
     finally:
         # Save final model
         final_model_path = output_dir_for_run / "final_model"
         
         should_save_best_model_as_final = False
-        if not args.disable_wandb and wandb.run is not None:
-            # Safely check wandb.summary for early stopping information
+        # Robustly check wandb.summary for early stopping information
+        if not args.disable_wandb and wandb.run is not None and wandb.run.summary is not None:
             try:
-                if wandb.summary.get("stopped_early", False): # Use .get for safety
+                # Use .get() for all checks on wandb.summary
+                if wandb.run.summary.get("stopped_early", False):
                     should_save_best_model_as_final = True
-            except Exception as e_summary_check:
+            except AttributeError: # Handles cases where wandb.run.summary might not be a dict-like object
+                logging.warning("wandb.run.summary does not support .get(), proceeding to save current model.")
+            except Exception as e_summary_check: # Catch other potential errors during summary access
                 logging.warning(f"Could not access wandb.summary for early stopping check: {e_summary_check}. Proceeding to save current model.")
+        else:
+            logging.info("W&B not active or summary unavailable for early stopping check. Proceeding to save current model or best if flag already set.")
 
         if should_save_best_model_as_final:
             # If stopped early (and W&B summary was accessible), the best_model is the one to save as final
