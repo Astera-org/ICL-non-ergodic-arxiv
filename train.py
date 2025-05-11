@@ -348,15 +348,23 @@ def train(args: argparse.Namespace):
     if args.checkpoint_interval_steps > 0:
         step_checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- GEOM CKPT STATE ---
+    # Directory for top N EMA validation loss checkpoints
+    top_ema_val_checkpoints_dir = output_dir_for_run / "top_ema_val_checkpoints"
+    if args.num_best_ema_val_checkpoints > 1: # Only create if we are saving more than just the single 'best_model'
+        top_ema_val_checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    saved_top_ema_val_models_info = [] # Stores (ema_val_loss, path_str, optimizer_step, eval_epoch)
+
+    # --- GEOM CKPT STATE --- (Now for raw validation loss based checkpoints)
     loss_ckpt_dir = output_dir_for_run / "loss_checkpoints"
     loss_ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    geom_ema   = None        # running EMA of train loss
-    geom_last  = None        # EMA at last checkpoint
-    geom_saved = []          # list of Path objects for rolling deletion
-    alpha, beta = args.geom_alpha, args.geom_beta
-    # For geometric checkpoint in-context loss plotting
+    # New: Tracker for best raw validation loss for these specific checkpoints
+    best_raw_val_for_geom_checkpoints = float('inf')
+    # geom_ema, geom_last related to train loss EMA are no longer used for triggering these ckpts.
+    geom_saved_checkpoints = [] # List of Path objects for rolling deletion of loss-based checkpoints
+    # args.geom_alpha is likely unused. args.geom_beta (0.95 by default) is the improvement factor for raw validation loss.
+    
+    # For geometric checkpoint in-context loss plotting (still relevant when these ckpts are saved)
     geom_per_token_loss_xs = list(range(args.sequence_length)) 
     geom_per_token_loss_ys_list = []
     geom_per_token_loss_keys = []
@@ -390,9 +398,8 @@ def train(args: argparse.Namespace):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    # Keep detect_anomaly enabled
-    torch.autograd.set_detect_anomaly(True)
-    logging.info("Enabled torch.autograd.detect_anomaly.")
+    # torch.autograd.set_detect_anomaly(True) # Keep commented out unless actively debugging
+    # logging.info("Enabled torch.autograd.set_detect_anomaly.") # Keep commented out
 
     # 1. Select K categories
     selected_train_categories = select_categories(ALL_CATEGORIES, k=args.k, seed=args.seed)
@@ -522,575 +529,469 @@ def train(args: argparse.Namespace):
 
     # 4. Optimizer and Scheduler
     logging.info("Setting up optimizer and scheduler...")
-    # Use requested beta2 = 0.95 and eps = 1e-8
     optimizer = torch.optim.AdamW(model.parameters(), 
                                 lr=args.learning_rate, 
                                 weight_decay=args.weight_decay, 
-                                eps=args.adam_epsilon, # Use arg
-                                betas=(args.adam_beta1, args.adam_beta2)) # Use args
+                                eps=args.adam_epsilon,
+                                betas=(args.adam_beta1, args.adam_beta2)) # Use configured betas
     
-    # --- New Scheduler Setup ---
-    warmup_scheduler = None
-    if args.num_warmup_steps > 0:
-        # The 'num_training_steps' for the warmup scheduler should be set
-        # such that it only covers the warmup period.
-        warmup_scheduler = get_scheduler(
-            name="constant_with_warmup",  # Using constant_with_warmup
-            optimizer=optimizer,
-            num_warmup_steps=args.num_warmup_steps
-        )
-        logging.info(f"Warmup scheduler configured for {args.num_warmup_steps} steps using constant_with_warmup.")
+    # Calculate total training steps based on evaluation epochs and steps per eval epoch
+    max_total_optimizer_steps = args.epochs * args.steps_per_eval_epoch
+    logging.info(f"Max total optimizer steps: {max_total_optimizer_steps} ({args.epochs} eval epochs * {args.steps_per_eval_epoch} steps/eval_epoch)")
 
-    # Main scheduler for after the warmup phase (if any)
+    if args.num_warmup_steps > max_total_optimizer_steps:
+        logging.warning(f"num_warmup_steps ({args.num_warmup_steps}) is greater than max_total_optimizer_steps ({max_total_optimizer_steps}). Consider reducing warmup steps.")
+
+    lr_scheduler = get_scheduler(
+        name=args.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=args.num_warmup_steps * args.gradient_accumulation_steps, # Scheduler steps are micro-steps if it depends on total steps
+        num_training_steps=max_total_optimizer_steps * args.gradient_accumulation_steps # Scheduler steps are micro-steps
+    )
+    logging.info(f"LR Scheduler: {args.lr_scheduler_type} with {args.num_warmup_steps * args.gradient_accumulation_steps} micro warmup steps and {max_total_optimizer_steps * args.gradient_accumulation_steps} total micro training steps.")
+
+    # Gradient scaler for mixed precision (fp16)
+    scaler = GradScaler(enabled=(args.precision == "fp16"))
+    logging.info(f"GradScaler enabled: {scaler.is_enabled()}")
+
+    # For "best model" saving based on EMA validation loss
+    best_ema_val_loss = float('inf')
+    epochs_since_last_best_ema_val_loss = 0 # For early stopping based on eval epochs
+    # Note: The single best_model/ checkpoint is handled separately from the top_N list.
+    
+    # For ReduceLROnPlateau (if used, though factor=1.0 disables it in current plan)
+    # This scheduler operates on evaluation epochs and EMA validation loss.
     plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        mode='min',  # We monitor validation loss, which we want to minimize
+        mode='min',
         factor=args.reduce_lr_factor,
         patience=args.reduce_lr_patience,
-        threshold=args.early_stopping_delta, # Can reuse delta or define a specific threshold for LR reduction
         min_lr=args.min_lr,
-        #verbose=True  # Logs a message when LR is reduced
+        verbose=True
     )
     logging.info(f"ReduceLROnPlateau scheduler configured with factor={args.reduce_lr_factor}, patience={args.reduce_lr_patience}, min_lr={args.min_lr}.")
-    # --- End New Scheduler Setup ---
+
 
     # 5. Training Loop
     logging.info("Starting training loop...")
     global_optimizer_step = 0
-    global_micro_batch_step = 0 # Counts micro-batches *processed* (i.e., after backward pass) within an accumulation cycle
-    best_val_loss_for_early_stopping = float('inf') # This will now track best *raw* val_loss for saving model
-    training_has_been_stopped_early = False # Flag to indicate if early stopping triggered
-    epoch_at_best_val_loss = 0 # To store the epoch number when best val loss was seen
-    step_at_best_val_loss = 0  # To store the optimizer step when best val loss was seen
+    global_micro_step = 0 # Tracks total micro-steps (samples processed * sequence_length)
     
-    # New for EMA and step-based patience
-    ema_val_loss = None # Will store the current EMA of validation loss
-    best_ema_val_loss_seen = float('inf') # Tracks the best EMA validation loss for decision making
-    steps_since_last_best_ema_val_loss = 0
-    epochs_since_last_best_ema_val_loss = 0 # Counts epochs since best EMA val loss was seen
-    opt_steps_at_epoch_start = 0 # To track optimizer steps per epoch
-
-    saved_step_checkpoints = []
-    training_complete = False
-    first_batch_checked = False # Flag for vocab check
-    accumulated_loss_for_opt_step = 0.0 # Accumulator for average loss
-    last_opt_step_time = time.time() # For timing steps
-    scaler = torch.amp.GradScaler(enabled=(args.precision == 'fp16')) # GradScaler for fp16
-    dtype = torch.bfloat16 if args.precision == 'bf16' else torch.float32 # Determine autocast dtype
-    final_saved_model_path = output_dir_for_run / "final_model" # Define path earlier
-
-    # --- Calculate total optimizer steps and evaluation epoch counter ---
-    max_total_optimizer_steps = args.epochs * args.steps_per_eval_epoch
-    current_eval_epoch = 0 # Will be 0-indexed internally, 1-indexed for logging/reporting
-    logging.info(f"Training for a maximum of {args.epochs} evaluation epochs, with {args.steps_per_eval_epoch} optimizer steps per evaluation epoch.")
-    logging.info(f"Total maximum optimizer steps: {max_total_optimizer_steps}")
-    # --- End total optimizer steps ---
-
-    # --- Embedding Debug Hook ---
-    nan_debug_info = {'triggered': False, 'hook_active': True}
-    # Define hook function within train()
-    def embedding_forward_hook(module, input_args, output):
-        if not nan_debug_info['hook_active']:
-            return output
-        is_target_step = (global_optimizer_step == 0 and 
-                          global_micro_batch_step == (args.gradient_accumulation_steps - 1) )
-        if is_target_step and not nan_debug_info['triggered']:
-            try:
-                input_ids_to_embedding = input_args[0]
-                output_embeddings = output
-                logging.info(f"HOOK (Opt_Step={global_optimizer_step}, Micro_Step_About_To_Process={global_micro_batch_step+1}): Embedding Layer Forward Hook Triggered.")
-                logging.info(f"HOOK: Input IDs to embedding layer shape: {input_ids_to_embedding.shape}, dtype: {input_ids_to_embedding.dtype}, device: {input_ids_to_embedding.device}")
-                input_ids_min = input_ids_to_embedding.min().item()
-                input_ids_max = input_ids_to_embedding.max().item()
-                logging.info(f"HOOK: Input IDs min: {input_ids_min}, max: {input_ids_max}")
-
-                if torch.any(input_ids_to_embedding < 0) or torch.any(input_ids_to_embedding >= VOCAB_SIZE):
-                    logging.error(f"HOOK: Problematic input IDs DETECTED: min={input_ids_min}, max={input_ids_max}, vocab_size={VOCAB_SIZE}")
-                    problematic_ids_mask = (input_ids_to_embedding < 0) | (input_ids_to_embedding >= VOCAB_SIZE)
-                    problematic_ids_values = input_ids_to_embedding[problematic_ids_mask]
-                    logging.error(f"HOOK: Specific out-of-bounds/negative IDs ({problematic_ids_values.numel()}): {problematic_ids_values.tolist()[:20]}") # Log first 20
-
-                logging.info(f"HOOK: Embedding layer weights shape: {module.weight.shape}, dtype: {module.weight.dtype}, device: {module.weight.device}")
-                logging.info(f"HOOK: Embedding layer weights (sample, weight[0, :10]): {module.weight.data[0, :10].tolist()}")
-                weights_are_finite = torch.isfinite(module.weight.data).all().item()
-                logging.info(f"HOOK: Embedding layer weights finite: {weights_are_finite}")
-                if weights_are_finite:
-                    logging.info(f"HOOK: Embedding layer weights min: {module.weight.data.min().item():.4e}, max: {module.weight.data.max().item():.4e}, mean: {module.weight.data.mean().item():.4e}")
-                else:
-                    logging.error("HOOK: EMBEDDING WEIGHTS ARE NON-FINITE!")
-                    num_non_finite_weights = (~torch.isfinite(module.weight.data)).sum().item()
-                    logging.error(f"HOOK: Number of non-finite weights: {num_non_finite_weights} / {module.weight.data.numel()}")
-
-
-                logging.info(f"HOOK: Output embeddings shape: {output_embeddings.shape}, dtype: {output_embeddings.dtype}, device: {output_embeddings.device}")
-                outputs_are_finite = torch.isfinite(output_embeddings).all().item()
-                logging.info(f"HOOK: Output embeddings finite: {outputs_are_finite}")
-                if outputs_are_finite:
-                    logging.info(f"HOOK: Output embeddings min: {output_embeddings.min().item():.4e}, max: {output_embeddings.max().item():.4e}, mean: {output_embeddings.mean().item():.4e}")
-
-                if not outputs_are_finite:
-                    logging.error("HOOK: NaN/Inf DETECTED in embedding output!")
-                    nan_inf_mask_output = ~torch.isfinite(output_embeddings)
-                    num_nan_inf_output = nan_inf_mask_output.sum().item()
-                    logging.error(f"HOOK: Number of non-finite values in embedding output: {num_nan_inf_output} / {output_embeddings.numel()}")
-                    
-                    problem_indices = nan_inf_mask_output.nonzero(as_tuple=False)
-                    logging.error(f"HOOK: Indices of non-finite output embeddings (first 5): {problem_indices[:5].tolist()}")
-
-                    for i in range(min(5, problem_indices.shape[0])):
-                        idx_tuple = tuple(problem_indices[i].tolist()) 
-                        
-                        problem_input_id_batch_idx = idx_tuple[0]
-                        problem_input_id_seq_idx = idx_tuple[1]
-                        
-                        problem_token_id = input_ids_to_embedding[problem_input_id_batch_idx, problem_input_id_seq_idx].item()
-                        problem_embedding_vector = output_embeddings[problem_input_id_batch_idx, problem_input_id_seq_idx]
-
-                        logging.error(
-                            f"HOOK: Problem case {i+1}: Input ID {problem_token_id} "
-                            f"at input_ids[{problem_input_id_batch_idx}, {problem_input_id_seq_idx}] "
-                            f"produced non-finite embedding vector. Vector sample (first 10): {problem_embedding_vector[:10].tolist()}"
-                        )
-                        
-                        if 0 <= problem_token_id < module.weight.shape[0]: # Check against embedding matrix dim
-                            embedding_row_for_problem_id = module.weight.data[problem_token_id]
-                            is_row_finite = torch.isfinite(embedding_row_for_problem_id).all().item()
-                            logging.error(
-                                f"HOOK: Corresponding embedding weight row for token {problem_token_id} is finite: {is_row_finite}. "
-                                f"Weight row sample: {embedding_row_for_problem_id[:10].tolist()}"
-                            )
-                            if is_row_finite:
-                                logging.error(
-                                    f"HOOK: Weight row for token {problem_token_id} - min: {embedding_row_for_problem_id.min().item():.4e}, "
-                                    f"max: {embedding_row_for_problem_id.max().item():.4e}, mean: {embedding_row_for_problem_id.mean().item():.4e}"
-                                )
-                        else:
-                            logging.error(f"HOOK: Problem token ID {problem_token_id} is out of bounds for embedding matrix lookup (vocab size {VOCAB_SIZE}, weight matrix dim0 {module.weight.shape[0]}).")
-
-                    debug_dir = Path("./embedding_nan_debug")
-                    debug_dir.mkdir(exist_ok=True)
-                    torch.save(input_ids_to_embedding.cpu(), debug_dir / "problem_input_ids.pt")
-                    torch.save(module.weight.data.clone().cpu(), debug_dir / "problem_embedding_weights.pt")
-                    torch.save(output_embeddings.cpu(), debug_dir / "problem_output_embeddings.pt") # Save a clone of output
-                    logging.info(f"HOOK: Saved debug tensors to {debug_dir}")
-                    
-                    nan_debug_info['triggered'] = True
-            except Exception as hook_e:
-                logging.error(f"HOOK: Exception during hook execution: {hook_e}", exc_info=True)
-        return output
+    # Use an iterator for the dataloader to allow cycling
+    train_dataloader_iter = iter(train_dataloader)
     
-    hook_handle = None
-    # --- End Embedding Debug Hook ---
+    # Progress bar for total optimizer steps
+    progress_bar_total_steps = tqdm(total=max_total_optimizer_steps, desc="Total Optimizer Steps", unit="step", dynamic_ncols=True)
 
-    # Moved hook registration outside the main try/except/finally for clarity
-    # It will be cleaned up in the main 'finally' block
-    if hasattr(model, 'gpt_neox') and hasattr(model.gpt_neox, 'embed_in'):
-        hook_handle = model.gpt_neox.embed_in.register_forward_hook(embedding_forward_hook)
-        logging.info("Registered forward hook on embedding layer for NaN debugging.")
-    else:
-        logging.warning("Could not register embedding forward hook: gpt_neox.embed_in not found.")
+    # Training loop (while optimizer steps < max_total_optimizer_steps)
+    # Loop condition is at the end of the inner loop to ensure final evaluation and saving
+    # current_eval_epoch is 1-indexed for logging/display
+    current_eval_epoch = 0 
 
-    try: # MAIN TRY BLOCK FOR TRAINING
-        # Log model parameter norm before starting the loop
-        model_param_norm_before_loop = 0
-        for p in model.parameters():
-            model_param_norm_before_loop += p.data.norm(2).item() ** 2
-        model_param_norm_before_loop = model_param_norm_before_loop ** 0.5
-        logging.info(f"Model Parameter Norm before training loop: {model_param_norm_before_loop:.4f}")
-        if not args.disable_wandb:
-             wandb.log({ "train/model_param_norm_before_loop": model_param_norm_before_loop, "train/global_optimizer_step": 0})
+    training_start_time = time.time()
 
-        # --- Modified Training Loop ---\
-        train_dataloader_iter = iter(train_dataloader) 
-        
-        progress_bar = tqdm(total=max_total_optimizer_steps, desc="Total Optimizer Steps", 
-                            initial=global_optimizer_step, leave=True, 
-                            disable=(max_total_optimizer_steps == 0))
-
-        # Main training loop controlled by optimizer steps
+    try:
         while global_optimizer_step < max_total_optimizer_steps:
-            if training_has_been_stopped_early:
-                logging.info(f"Early stopping condition met. Exiting training loop at optimizer step {global_optimizer_step}.")
-                break 
-
-            try:
-                batch = next(train_dataloader_iter)
-            except StopIteration:
-                logging.info(f"Cycled train_dataloader at optimizer step {global_optimizer_step}.")
-                train_dataloader_iter = iter(train_dataloader) 
-                batch = next(train_dataloader_iter)
+            model.train() # Set model to training mode for each "conceptual" epoch start
             
-            # --- Start of operations for one batch (or micro-batch) ---
-            model.train() 
-            _first_non_finite_detected = False 
-            input_ids = batch.to(device)
-            labels = input_ids 
-            
-            if not first_batch_checked:
-                max_token_id = input_ids.max().item()
-                assert max_token_id < VOCAB_SIZE, \
-                    f"Initial batch token ID {max_token_id} >= vocab size {VOCAB_SIZE}. Check tokenization/data."
-                logging.info(f"Initial batch token ID check passed (max_id={max_token_id}, vocab_size={VOCAB_SIZE}).")
-                first_batch_checked = True
-            
-            if args.precision != "fp32" and device.type == 'cuda':
-                with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16 if args.precision == "bf16" else torch.float16):
-                    outputs = model(input_ids=input_ids, labels=labels)
-                    loss = outputs.loss
-            else: 
-                outputs = model(input_ids=input_ids, labels=labels)
-                if not torch.isfinite(outputs.logits).all():
-                    logging.error(f"Infinite/NaN logit detected at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step+1} (0-indexed micro w/in accum)")
-                    logging.error(f"Logits min: {outputs.logits.min().item()}, max: {outputs.logits.max().item()}, mean: {outputs.logits.mean().item()}")
-                    problematic_dir = Path("./problematic_batch_data")
-                    problematic_dir.mkdir(exist_ok=True)
-                    torch.save(input_ids, problematic_dir / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step+1}.pt")
-                    raise RuntimeError(f"Infinite/NaN logit detected at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step+1}. See logs and problematic_batch_data/ for details.")
-                loss = outputs.loss
-            
-            if not torch.isfinite(loss):
-                logging.error(f"NaN or Inf loss detected at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step+1} (0-indexed) BEFORE backward(). Loss: {loss.item()}")
-                problematic_dir = Path("./problematic_batch_data")
-                problematic_dir.mkdir(exist_ok=True)
-                torch.save(input_ids, problematic_dir / f"problematic_input_ids_opt{global_optimizer_step}_micro{global_micro_batch_step}_loss_nan.pt")
-                raise ValueError(f"NaN or Inf loss detected BEFORE backward() at Opt Step {global_optimizer_step}, Micro-step {global_micro_batch_step}")
-
-            loss = loss / args.gradient_accumulation_steps
-            
-            if args.precision == 'fp16':
-                scaler.scale(loss).backward()
-            elif args.precision == 'bf16':
-                loss.backward()
-            else: 
-                loss.backward()
-            
-            accumulated_loss_for_opt_step += loss.item() 
-            
-            if (global_micro_batch_step + 1) % args.gradient_accumulation_steps == 0:
-                total_norm_before_clip = 0
-                for p in model.parameters():
-                    if p.grad is not None:
-                        if not torch.isfinite(p.grad.data).all():
-                            logging.error(f"NaN/Inf gradient detected for param before unscale/clip at Opt Step {global_optimizer_step}, Current Micro-batch index {global_micro_batch_step}")
-                            p.grad.data = torch.where(torch.isfinite(p.grad.data), p.grad.data, torch.zeros_like(p.grad.data))
-                            logging.warning("Replaced non-finite gradients with zeros for safety before norm calculation.")
-                        param_norm = p.grad.data.norm(2)
-                        total_norm_before_clip += param_norm.item() ** 2
-                total_norm_before_clip = total_norm_before_clip ** 0.5
-
-                if args.precision == 'fp16':
-                    scaler.unscale_(optimizer) 
+            # Inner loop for optimizer steps within an evaluation period
+            # This loop will run args.steps_per_eval_epoch times OR until max_total_optimizer_steps is reached
+            steps_in_current_eval_period = 0
+            while steps_in_current_eval_period < args.steps_per_eval_epoch and global_optimizer_step < max_total_optimizer_steps:
+                optimizer.zero_grad() # Zero gradients for each accumulation cycle
                 
-                clip_threshold = args.max_grad_norm 
-                for p in model.parameters(): 
-                    if p.grad is not None and torch.isfinite(p.grad.data).all():
-                         torch.nn.utils.clip_grad_norm_(p, max_norm=clip_threshold) 
-                    elif p.grad is not None: 
-                         logging.warning(f"Skipping clip_grad_norm_ for a parameter with non-finite gradient at Opt Step {global_optimizer_step}")
-                clip_hit = 1 if total_norm_before_clip > clip_threshold else 0
-
-                total_norm_after_clip = 0
-                for p in model.parameters():
-                    if p.grad is not None and torch.isfinite(p.grad.data).all(): 
-                        param_norm = p.grad.data.norm(2)
-                        total_norm_after_clip += param_norm.item() ** 2
-                    elif p.grad is not None and not torch.isfinite(p.grad.data).all():
-                        logging.warning(f"Skipping norm calculation for param with non-finite grad after clip attempt at Opt Step {global_optimizer_step}")
-                total_norm_after_clip = total_norm_after_clip ** 0.5
+                accumulated_loss = 0.0 # Accumulate loss over gradient_accumulation_steps
                 
-                if args.precision == 'fp16':
-                    scaler.step(optimizer)
-                    scaler.update() 
-                    current_grad_scaler_scale = scaler.get_scale()
-                else: 
-                    optimizer.step()
-                    current_grad_scaler_scale = float('nan')
-
-                optimizer.zero_grad() 
-                
-                if warmup_scheduler is not None and global_optimizer_step < args.num_warmup_steps:
-                    warmup_scheduler.step()
-
-                global_optimizer_step += 1 
-                progress_bar.update(1)
-
-                if global_optimizer_step == 1: 
-                    logging.info(f"POST OPTIMIZER STEP 0 (current global_optimizer_step={global_optimizer_step}): Checking all model weights for finiteness.")
-                    all_weights_finite_after_step0 = True
-                    for name, param in model.named_parameters():
-                        if not torch.isfinite(param.data).all():
-                            logging.error(f"POST OPTIMIZER STEP 0: Parameter '{name}' HAS NON-FINITE weights! Shape: {param.shape}, Dtype: {param.dtype}")
-                            all_weights_finite_after_step0 = False
-                            non_finite_values = param.data[~torch.isfinite(param.data)]
-                            logging.error(f"POST OPTIMIZER STEP 0: Non-finite values in '{name}' (first 10): {non_finite_values.flatten()[:10].tolist()}")
-                    if all_weights_finite_after_step0:
-                        logging.info("POST OPTIMIZER STEP 0: All model weights are finite.")
-                    else:
-                        logging.error("POST OPTIMIZER STEP 0: NON-FINITE WEIGHTS DETECTED AFTER FIRST OPTIMIZER STEP!")
-                
-                current_lr = optimizer.param_groups[0]['lr']
-                current_time = time.time()
-                time_per_opt_step = current_time - last_opt_step_time
-                last_opt_step_time = current_time
-                avg_loss_this_opt_step = accumulated_loss_for_opt_step
-                accumulated_loss_for_opt_step = 0.0 
-                
-                geom_ema = (avg_loss_this_opt_step if geom_ema is None else beta * geom_ema + (1 - beta) * avg_loss_this_opt_step)
-                if geom_last is None or geom_ema <= alpha * geom_last:
-                    current_eval_epoch_for_geom = (global_optimizer_step // args.steps_per_eval_epoch) if args.steps_per_eval_epoch > 0 else 0
-                    save_geom_ckpt(model, global_optimizer_step, geom_ema, loss_ckpt_dir, geom_saved, 
-                                   args, wandb, logging, shutil, 
-                                   val_dataloader, device, current_eval_epoch_for_geom +1 if args.steps_per_eval_epoch > 0 else 1, evaluate, 
-                                   geom_per_token_loss_xs, geom_per_token_loss_ys_list, geom_per_token_loss_keys,
-                                   output_dir_for_run)
-                    geom_last = geom_ema
-
-                if not args.disable_wandb and args.epochs > 0:
-                    model_param_norm_current_step = torch.nn.utils.parameters_to_vector(
-                        [p.detach() for p in model.parameters() if torch.isfinite(p.detach()).all()]
-                    ).norm().item() if any(torch.isfinite(p.detach()).all() for p in model.parameters()) else float('nan')
-                    wandb_logs = {
-                        "train/avg_loss_per_opt_step": avg_loss_this_opt_step,
-                        "train/learning_rate": current_lr,
-                        "train/global_optimizer_step": global_optimizer_step,
-                        "eval_epoch": (global_optimizer_step // args.steps_per_eval_epoch) + 1 if args.steps_per_eval_epoch > 0 else 1,
-                        "train/grad_norm_before_clip": total_norm_before_clip,
-                        "train/grad_norm_after_clip": total_norm_after_clip,
-                        "train/clip_hit": clip_hit,
-                        "train/time_per_opt_step": time_per_opt_step,
-                        "train/model_param_norm_current_step": model_param_norm_current_step
-                    }
-                    if args.precision == 'fp16':
-                        wandb_logs["train/grad_scaler_scale"] = current_grad_scaler_scale
-                    wandb.log(wandb_logs)
-                
-                if global_optimizer_step % args.log_interval == 0 and args.epochs > 0:
-                    _current_eval_epoch_display = (global_optimizer_step // args.steps_per_eval_epoch) + 1 if args.steps_per_eval_epoch > 0 else 1
-                    log_msg = f"Eval Epoch {_current_eval_epoch_display}, Opt Step {global_optimizer_step}/{max_total_optimizer_steps}, LR {current_lr:.2e}, Avg Loss: {avg_loss_this_opt_step:.4f}"
-                    log_msg += f", Grad Norm (Before/After Clip): {total_norm_before_clip:.2f}/{total_norm_after_clip:.2f} (Hit: {clip_hit})"
-                    if 'model_param_norm_current_step' in locals() and not np.isnan(model_param_norm_current_step): 
-                         log_msg += f", Model Norm: {model_param_norm_current_step:.2f}"
-                    if args.precision == 'fp16':
-                        log_msg += f", GradScaler Scale: {current_grad_scaler_scale:.0f}"
-                    log_msg += f", Time/OptStep: {time_per_opt_step:.2f}s"
-                    logging.info(log_msg)
-
-                if args.checkpoint_interval_steps > 0 and (global_optimizer_step % args.checkpoint_interval_steps == 0) and global_optimizer_step > 0:
-                    step_checkpoint_path = step_checkpoints_dir / f"step_{global_optimizer_step}"
-                    model.save_pretrained(step_checkpoint_path)
-                    saved_step_checkpoints.append(step_checkpoint_path)
-                    if args.max_step_checkpoints > 0 and len(saved_step_checkpoints) > args.max_step_checkpoints:
-                        oldest_checkpoint = saved_step_checkpoints.pop(0)
-                        if oldest_checkpoint.exists():
-                            shutil.rmtree(oldest_checkpoint)
-                            logging.info(f"Removed oldest step checkpoint: {oldest_checkpoint}")
-                
-                if global_optimizer_step > 0 and (global_optimizer_step % args.steps_per_eval_epoch == 0):
-                    current_eval_epoch_for_eval = (global_optimizer_step // args.steps_per_eval_epoch)
+                for micro_step in range(args.gradient_accumulation_steps):
+                    try:
+                        batch = next(train_dataloader_iter)
+                    except StopIteration:
+                        logging.info("Training dataloader exhausted, re-initializing.")
+                        train_dataloader_iter = iter(train_dataloader)
+                        batch = next(train_dataloader_iter)
                     
-                    logging.info(f"--- Evaluating at end of Evaluation Epoch {current_eval_epoch_for_eval} (Optimizer Step {global_optimizer_step}) ---")
-                    
-                    if val_dataloader:
-                        val_loss, _ = evaluate(model, val_dataloader, device, current_eval_epoch_for_eval, args, calculate_per_token_loss=False)
-                        
-                        if warmup_scheduler is None or global_optimizer_step >= args.num_warmup_steps:
-                            plateau_scheduler.step(val_loss)
+                    input_ids = batch['input_ids'].to(device)
+                    labels = input_ids.clone() # For causal LM, labels are usually input_ids shifted
 
-                        if ema_val_loss is None: ema_val_loss = val_loss
-                        else: ema_val_loss = args.ema_val_loss_alpha * val_loss + (1 - args.ema_val_loss_alpha) * ema_val_loss
+                    # Forward pass with autocast if precision is not fp32
+                    with autocast(enabled=(args.precision != "fp32"), dtype=torch.bfloat16 if args.precision == "bf16" else torch.float16):
+                        outputs = model(input_ids, labels=labels)
+                        loss = outputs.loss
                         
-                        current_lr_for_log = optimizer.param_groups[0]['lr']
-                        logging.info(
-                            f"Eval Epoch {current_eval_epoch_for_eval} | Opt Step {global_optimizer_step}: Raw Val Loss: {val_loss:.4f}, EMA Val Loss: {ema_val_loss:.4f}, "
-                            f"Best Raw Val Loss Seen: {best_val_loss_for_early_stopping:.4f}, LR: {current_lr_for_log:.2e}"
-                        )
-                        if not args.disable_wandb and wandb.run is not None:
-                            wandb.log({
-                                "eval/eval_epoch_raw_val_loss": val_loss, 
-                                "eval/eval_epoch_ema_val_loss": ema_val_loss, 
-                                "eval_epoch": current_eval_epoch_for_eval, 
-                                "train/learning_rate_at_eval": current_lr_for_log,
-                                "eval/epochs_since_last_best_ema": epochs_since_last_best_ema_val_loss 
-                            })
-
-                        if val_loss < best_val_loss_for_early_stopping - args.early_stopping_delta:
-                            best_val_loss_for_early_stopping = val_loss
-                            epoch_at_best_val_loss = current_eval_epoch_for_eval 
-                            step_at_best_val_loss = global_optimizer_step
-                            logging.info(
-                                f"New BEST RAW validation loss: {best_val_loss_for_early_stopping:.4f} "
-                                f"achieved at Eval Epoch {epoch_at_best_val_loss}, Optimizer Step {step_at_best_val_loss}. Saving model..."
-                            )
-                            best_model_path = output_dir_for_run / "best_model"
-                            model.save_pretrained(best_model_path)
+                        # Logit check (example, can be expanded)
+                        if not torch.isfinite(outputs.logits).all():
+                            logging.error(f"NON-FINITE LOGITS DETECTED at global optimizer step {global_optimizer_step}, micro_step in acc: {micro_step}")
+                            # Potentially save debug info, then raise error or try to recover
+                            # For now, log and continue, but this often precedes NaN loss
                             if not args.disable_wandb and wandb.run is not None:
-                                wandb.summary["best_val_loss"] = best_val_loss_for_early_stopping
-                                wandb.summary["eval_epoch_at_best_val_loss"] = epoch_at_best_val_loss
-                                wandb.summary["step_at_best_val_loss"] = step_at_best_val_loss
-                                wandb.summary["best_ema_val_loss_at_best_raw"] = ema_val_loss
+                                wandb.log({"error/non_finite_logits_step": global_optimizer_step})
 
-                        if ema_val_loss < best_ema_val_loss_seen - args.early_stopping_delta:
-                            best_ema_val_loss_seen = ema_val_loss
-                            epochs_since_last_best_ema_val_loss = 0 
-                            logging.info(f"New best EMA validation loss: {best_ema_val_loss_seen:.4f} at Eval Epoch {current_eval_epoch_for_eval}.")
-                        else:
-                            epochs_since_last_best_ema_val_loss += 1
-                            logging.info(
-                                f"EMA validation loss did not improve at Eval Epoch {current_eval_epoch_for_eval}. "
-                                f"Eval Epochs since last best EMA: {epochs_since_last_best_ema_val_loss}/{args.early_stopping_patience}."
-                            )
 
-                        if epochs_since_last_best_ema_val_loss >= args.early_stopping_patience:
-                            logging.info(f"Early stopping triggered at Eval Epoch {current_eval_epoch_for_eval} (Optimizer Step {global_optimizer_step}).")
-                            training_has_been_stopped_early = True
+                    if loss is None or not torch.isfinite(loss):
+                        logging.error(f"NaN or Inf loss detected BEFORE backward() at global_optimizer_step={global_optimizer_step}, micro_step_in_acc={micro_step}. Loss: {loss}")
+                        if not args.disable_wandb and wandb.run is not None:
+                            wandb.log({"error/nan_inf_loss_step": global_optimizer_step})
+                        # Consider skipping optimizer step or stopping if NaNs are persistent
+                        # For now, we will let it proceed to scaler.scale(loss).backward() which might also error
+                        # and then the optimizer step might be skipped if grads are non-finite.
+                        # If loss is None, backward() will fail.
+                        if loss is None: loss = torch.tensor(float('nan'), device=device) # Ensure loss is a tensor for backward() to fail on if it was None
                     
-                    elif not val_dataloader and args.epochs > 0:
-                        logging.info(f"Completed Evaluation Epoch {current_eval_epoch_for_eval} (Optimizer Step {global_optimizer_step}). No validation data.")
-            global_micro_batch_step += 1 
-            if global_micro_batch_step >= args.gradient_accumulation_steps:
-                global_micro_batch_step = 0
+                    # Normalize loss if accumulating gradients
+                    loss = loss / args.gradient_accumulation_steps
+                    accumulated_loss += loss.item() # Accumulate item for logging
+                    
+                    # Backward pass
+                    scaler.scale(loss).backward() # Scales loss and calls backward
+                    
+                    global_micro_step += 1
+
+                # Gradient Clipping (on unscaled grads)
+                scaler.unscale_(optimizer) # Unscale gradients before clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                
+                # Optimizer Step
+                scaler.step(optimizer) # Optimizer step, checks for inf/NaN scaled grads
+                scaler.update() # Update scaler for next iteration
+                
+                lr_scheduler.step() # Step LR scheduler
+
+                global_optimizer_step += 1
+                steps_in_current_eval_period += 1
+                progress_bar_total_steps.update(1)
+
+                # Logging at log_interval (optimizer steps)
+                if global_optimizer_step % args.log_interval == 0:
+                    log_payload = {
+                        "train/loss": accumulated_loss, # Avg loss for this optimizer step
+                        "train/learning_rate": optimizer.param_groups[0]['lr'],
+                        "progress/optimizer_step": global_optimizer_step,
+                        "progress/micro_step": global_micro_step,
+                        "progress/current_eval_epoch": current_eval_epoch + 1 # 1-indexed for display
+                    }
+                    logging.info(
+                        f"Eval Epoch: {current_eval_epoch + 1}/{args.epochs} | "
+                        f"Opt Step: {global_optimizer_step}/{max_total_optimizer_steps} | "
+                        f"Train Loss: {accumulated_loss:.4f} | "
+                        f"LR: {optimizer.param_groups[0]['lr']:.2e}"
+                    )
+                    if not args.disable_wandb and wandb.run is not None:
+                        wandb.log(log_payload, step=global_optimizer_step)
+                
+                # Periodic step-based checkpointing (based on optimizer steps)
+                if args.checkpoint_interval_steps > 0 and global_optimizer_step % args.checkpoint_interval_steps == 0:
+                    ckpt_path = step_checkpoints_dir / f"step_{global_optimizer_step:06d}"
+                    model.save_pretrained(ckpt_path)
+                    logging.info(f"Saved periodic step-based checkpoint to {ckpt_path} at optimizer step {global_optimizer_step}")
+                    # Manage number of step checkpoints
+                    existing_step_ckpts = sorted(step_checkpoints_dir.glob("step_*"), key=os.path.getmtime)
+                    if len(existing_step_ckpts) > args.max_step_checkpoints:
+                        for old_ckpt in existing_step_ckpts[:-args.max_step_checkpoints]:
+                            logging.info(f"Removing old step checkpoint: {old_ckpt}")
+                            shutil.rmtree(old_ckpt)
+                
+                if global_optimizer_step >= max_total_optimizer_steps:
+                    break # Exit inner loop if max total steps reached
+
+            # End of an evaluation period (args.steps_per_eval_epoch completed or max_total_optimizer_steps reached)
+            current_eval_epoch += 1 # Increment evaluation epoch counter (1-indexed for external use)
+            logging.info(f"Completed evaluation period. Current evaluation epoch: {current_eval_epoch}")
+
+            ema_val_loss_for_plateau_scheduler = best_ema_val_loss # Default to best if no new eval
+
+            if val_dataloader:
+                logging.info(f"Evaluating on validation set for evaluation epoch {current_eval_epoch} (OptStep: {global_optimizer_step})...")
+                # Pass current_eval_epoch (1-indexed) to evaluate function
+                raw_val_loss, _ = evaluate(model, val_dataloader, device, current_eval_epoch, args, calculate_per_token_loss=False) 
+                
+                if raw_val_loss is None or not np.isfinite(raw_val_loss): # Check for finite raw_val_loss
+                    logging.warning(f"Validation loss is NaN or Inf at eval epoch {current_eval_epoch}. Skipping best model/early stopping/loss-checkpoint logic for this epoch.")
+                else:
+                    # Update EMA of validation loss (for best_model checkpointing and ReduceLROnPlateau)
+                    if best_ema_val_loss == float('inf'): # First validation
+                        current_ema_val_loss = raw_val_loss
+                    else:
+                        val_ema_alpha = 0.2 # Smoothing factor for EMA validation loss (can be an arg)
+                        current_ema_val_loss = val_ema_alpha * raw_val_loss + (1 - val_ema_alpha) * best_ema_val_loss
+                    
+                    logging.info(f"Eval Epoch: {current_eval_epoch}/{args.epochs} | Opt Step: {global_optimizer_step} | Raw Val Loss: {raw_val_loss:.4f} | EMA Val Loss: {current_ema_val_loss:.4f}")
+                    if not args.disable_wandb and wandb.run is not None:
+                        wandb.log({
+                            "eval/raw_validation_loss": raw_val_loss,
+                            "eval/ema_validation_loss": current_ema_val_loss,
+                            "eval/evaluation_epoch": current_eval_epoch
+                        }, step=global_optimizer_step)
+
+                    ema_val_loss_for_plateau_scheduler = current_ema_val_loss # Used by ReduceLROnPlateau
+
+                    # Check for "best model" based on EMA validation loss (always keeps the single best overall)
+                    if current_ema_val_loss < best_ema_val_loss:
+                        best_ema_val_loss = current_ema_val_loss
+                        epochs_since_last_best_ema_val_loss = 0
+                        best_model_path = output_dir_for_run / "best_model"
+                        model.save_pretrained(best_model_path)
+                        logging.info(f"New best overall EMA validation loss: {best_ema_val_loss:.4f}. Saved best_model to {best_model_path}")
+                        if not args.disable_wandb and wandb.run is not None:
+                            wandb.summary["best_ema_val_loss"] = best_ema_val_loss
+                            wandb.summary["best_ema_val_loss_optimizer_step"] = global_optimizer_step
+                            wandb.summary["best_ema_val_loss_eval_epoch"] = current_eval_epoch
+                    else:
+                        epochs_since_last_best_ema_val_loss += 1
+                        logging.info(f"EMA validation loss did not improve for {epochs_since_last_best_ema_val_loss} eval epochs. Best overall EMA: {best_ema_val_loss:.4f}")
+
+                    # --- Top N EMA Validation Loss Checkpoints --- 
+                    if args.num_best_ema_val_checkpoints > 1: # Only active if user wants more than the single best_model
+                        made_change_to_top_list = False
+                        # Check if current model is better than the worst in the list or if list is not full
+                        if len(saved_top_ema_val_models_info) < args.num_best_ema_val_checkpoints or \
+                           current_ema_val_loss < saved_top_ema_val_models_info[-1][0]: # Assumes list is sorted best to worst
+                            
+                            # Create path for this potential top N checkpoint
+                            # Use a descriptive name including loss, step, and epoch
+                            top_n_ckpt_name = f"ema_{current_ema_val_loss:.4f}_step_{global_optimizer_step}_epoch_{current_eval_epoch}"
+                            top_n_ckpt_path = top_ema_val_checkpoints_dir / top_n_ckpt_name
+                            
+                            model.save_pretrained(top_n_ckpt_path)
+                            logging.info(f"Saved top N EMA val checkpoint to {top_n_ckpt_path} (EMA: {current_ema_val_loss:.4f})")
+                            
+                            # Add to list
+                            saved_top_ema_val_models_info.append((current_ema_val_loss, str(top_n_ckpt_path), global_optimizer_step, current_eval_epoch))
+                            # Sort by EMA val loss (ascending - best first)
+                            saved_top_ema_val_models_info.sort(key=lambda x: x[0])
+                            made_change_to_top_list = True
+
+                            # If list is now too long, remove the worst one
+                            if len(saved_top_ema_val_models_info) > args.num_best_ema_val_checkpoints:
+                                worst_model_info = saved_top_ema_val_models_info.pop() # Removes the last (worst)
+                                worst_model_path_to_delete = Path(worst_model_info[1])
+                                if worst_model_path_to_delete.exists():
+                                    shutil.rmtree(worst_model_path_to_delete)
+                                    logging.info(f"Removed old top N EMA val checkpoint: {worst_model_path_to_delete} (EMA: {worst_model_info[0]:.4f})")
+                        
+                        if made_change_to_top_list and not args.disable_wandb and wandb.run is not None:
+                            # Log the current top N list (e.g., just the losses and steps)
+                            top_n_summary = [(info[0], info[2], info[3]) for info in saved_top_ema_val_models_info] # (loss, step, epoch)
+                            wandb.log({"eval/top_n_ema_val_checkpoints_summary": top_n_summary}, step=global_optimizer_step)
+
+                    # --- "Loss-Based" Checkpoint (now triggered by raw validation loss improvement) ---
+                    # args.max_loss_ckpts: 0 means unlimited, negative means disabled.
+                    if args.max_loss_ckpts >= 0:
+                        # Check if raw_val_loss is significantly better than the best raw val loss seen by *this* mechanism
+                        if raw_val_loss < (best_raw_val_for_geom_checkpoints * args.geom_beta):
+                            logging.info(f"Raw validation loss {raw_val_loss:.4f} meets criteria for loss-based checkpoint against best_raw_val_for_geom ({best_raw_val_for_geom_checkpoints:.4f}) with factor {args.geom_beta}.")
+                            
+                            # save_geom_ckpt expects `loss_val` (the metric value causing the save), 
+                            # `current_epoch_idx` (0-indexed for its internal display/use if it expects an index),
+                            # and other context.
+                            save_geom_ckpt(
+                                model=model, 
+                                step=global_optimizer_step, 
+                                loss_val=raw_val_loss, # This is the raw validation loss that triggered the save
+                                loss_ckpt_dir=loss_ckpt_dir, 
+                                geom_saved_list=geom_saved_checkpoints, # Pass the correct list
+                                args_ref=args, 
+                                wandb_ref=wandb, 
+                                logging_ref=logging, 
+                                shutil_ref=shutil,
+                                val_dataloader=val_dataloader, 
+                                device_ref=device, 
+                                current_epoch_idx=current_eval_epoch - 1, # Pass 0-indexed if current_eval_epoch is 1-indexed
+                                evaluate_fn=evaluate, 
+                                geom_xs=geom_per_token_loss_xs, 
+                                geom_ys_list=geom_per_token_loss_ys_list, 
+                                geom_keys=geom_per_token_loss_keys,
+                                output_dir_for_run_ref=output_dir_for_run
+                            )
+                            best_raw_val_for_geom_checkpoints = raw_val_loss # Update the best raw val for this mechanism
+                        else:
+                            logging.info(f"Raw validation loss {raw_val_loss:.4f} did not meet criteria for loss-based checkpoint against best_raw_val_for_geom ({best_raw_val_for_geom_checkpoints:.4f}) with factor {args.geom_beta}.")
+                    # --- End of "Loss-Based" Checkpoint logic ---
+
+
+            # Step the ReduceLROnPlateau scheduler with EMA validation loss
+            if val_dataloader and np.isfinite(ema_val_loss_for_plateau_scheduler): # ensure it's a finite number
+                plateau_scheduler.step(ema_val_loss_for_plateau_scheduler)
+            elif not val_dataloader:
+                logging.debug("No validation dataloader, skipping ReduceLROnPlateau scheduler step.")
+            else:
+                logging.warning("EMA validation loss is not finite, skipping ReduceLROnPlateau scheduler step.")
+
+
+            # Early stopping check (based on EMA validation loss and eval epochs)
+            if args.early_stopping_patience > 0 and epochs_since_last_best_ema_val_loss >= args.early_stopping_patience:
+                logging.info(f"Early stopping triggered after {args.early_stopping_patience} evaluation epochs with no improvement in EMA validation loss.")
+                if not args.disable_wandb and wandb.run is not None:
+                    wandb.summary["stopped_early"] = True
+                    wandb.summary["stopped_at_eval_epoch"] = current_eval_epoch 
+                    wandb.summary["stopped_at_optimizer_step"] = global_optimizer_step
+                break # Exit the main training loop (while global_optimizer_step < max_total_optimizer_steps)
             
-            if training_has_been_stopped_early: 
-                break 
-        progress_bar.close()
+            if global_optimizer_step >= max_total_optimizer_steps:
+                logging.info(f"Reached max_total_optimizer_steps ({max_total_optimizer_steps}).")
+                break
 
-        if not training_has_been_stopped_early and global_optimizer_step >= max_total_optimizer_steps and max_total_optimizer_steps > 0:
-            logging.info(f"Training completed: Reached max_total_optimizer_steps ({max_total_optimizer_steps}).")
-        elif not training_has_been_stopped_early and max_total_optimizer_steps == 0 :
-            logging.info("Training configured for 0 total optimizer steps. Loop did not run.")
-
-    except RuntimeError as e:
-        if "Function '.*' returned nan values in its 0th output." in str(e) or \
-             "returned NULL output" in str(e): 
-            logging.error("torch.autograd.detect_anomaly triggered! See traceback for the operation causing NaN/Inf gradients.", exc_info=True)
-        else: 
-             logging.exception("An unexpected RuntimeError occurred during the training loop.") 
-        if not args.disable_wandb and wandb.run is not None: wandb.finish(exit_code=1) 
-        raise 
-    finally:
-        if hook_handle: 
-            hook_handle.remove()
-            logging.info("Removed embedding forward hook.")
-        nan_debug_info['hook_active'] = False 
-
-        torch.autograd.set_detect_anomaly(False)
-        logging.info("Disabled torch.autograd.detect_anomaly.")
-        logging.info("Training loop finished or interrupted. Proceeding to final steps.")
-        try:
-             if 'model' in locals(): 
-                 model.save_pretrained(final_saved_model_path)
-                 logging.info(f"Saved final model state to {final_saved_model_path}")
-             else:
-                 logging.warning("Model variable not found, cannot save final model.")
-        except Exception as e_save: 
-             logging.error(f"Failed to save final model: {e_save}")
+        # End of training loop (while global_optimizer_step < max_total_optimizer_steps)
+        progress_bar_total_steps.close()
+        training_duration_seconds = time.time() - training_start_time
+        logging.info(f"Training finished. Total optimizer steps: {global_optimizer_step}. Total evaluation epochs: {current_eval_epoch}.")
+        logging.info(f"Total training time: {training_duration_seconds:.2f} seconds ({training_duration_seconds/3600:.2f} hours).")
 
         if not args.disable_wandb and wandb.run is not None:
-            logging.info("Finishing W&B run...")
-            stopped_at_eval_epoch_for_summary = (global_optimizer_step // args.steps_per_eval_epoch) if args.steps_per_eval_epoch > 0 else 0
-            max_eval_epochs_for_summary = args.epochs
+            wandb.summary["total_optimizer_steps_completed"] = global_optimizer_step
+            wandb.summary["total_eval_epochs_completed"] = current_eval_epoch
+            wandb.summary["training_duration_hours"] = training_duration_seconds / 3600
+            if "stopped_early" not in wandb.summary: # If not stopped early
+                 wandb.summary["stopped_early"] = False
 
-            if training_has_been_stopped_early:
-                wandb.summary["stopping_reason"] = "early_stopping_triggered"
-                wandb.summary["stopped_at_eval_epoch"] = stopped_at_eval_epoch_for_summary 
-                wandb.summary["stopped_at_optimizer_step"] = global_optimizer_step
-            elif global_optimizer_step >= max_total_optimizer_steps and max_total_optimizer_steps > 0 :
-                wandb.summary["stopping_reason"] = "max_optimizer_steps_reached"
-                wandb.summary["stopped_at_eval_epoch"] = max_eval_epochs_for_summary
-                wandb.summary["stopped_at_optimizer_step"] = global_optimizer_step
-            else: 
-                wandb.summary["stopping_reason"] = "other_interruption_or_config"
-                wandb.summary["stopped_at_eval_epoch"] = stopped_at_eval_epoch_for_summary
-                wandb.summary["stopped_at_optimizer_step"] = global_optimizer_step
-            
-            completed_normally = (not training_has_been_stopped_early and 
-                                  global_optimizer_step >= max_total_optimizer_steps and
-                                  max_total_optimizer_steps > 0) 
-            exit_code = 0 if completed_normally or training_has_been_stopped_early else 1
-            wandb.finish(exit_code=exit_code)
-            
-        if args.upload_results_to_s3:
-            if not args.s3_results_bucket:
-                logging.error("S3 results bucket name must be provided using --s3_results_bucket to upload results.")
+
+    except Exception as e:
+        logging.error(f"Exception during training: {e}", exc_info=True) # Log traceback
+        if not args.disable_wandb and wandb.run is not None:
+            wandb.log({"error/training_exception": str(e)}, step=global_optimizer_step)
+            wandb.summary["training_crashed"] = True
+            wandb.summary["crash_message"] = str(e)
+    finally:
+        # Save final model
+        final_model_path = output_dir_for_run / "final_model"
+        if "stopped_early" in wandb.summary and wandb.summary["stopped_early"]:
+            # If stopped early, the best_model is the one to save as final
+            best_model_path = output_dir_for_run / "best_model"
+            if best_model_path.exists():
+                logging.info(f"Early stopping: Using best model from {best_model_path} as the final model.")
+                # We can either copy or just consider it the final one. For clarity, let's save it again to "final_model"
+                # shutil.copytree(best_model_path, final_model_path, dirs_exist_ok=True) # Option: copy
+                # Or, reload and save:
+                try:
+                    logging.info(f"Reloading best model from {best_model_path} to save as final model.")
+                    reloaded_best_model_config = AutoConfig.from_pretrained(best_model_path)
+                    reloaded_best_model = AutoModelForCausalLM.from_pretrained(best_model_path, config=reloaded_best_model_config)
+                    reloaded_best_model.save_pretrained(final_model_path)
+                    logging.info(f"Saved reloaded best model to {final_model_path}")
+                except Exception as e_reload_save:
+                    logging.error(f"Could not reload and save best_model as final_model. Saving current model instead. Error: {e_reload_save}")
+                    model.save_pretrained(final_model_path) # Fallback to current model
+                    logging.info(f"Saved current model as final model to {final_model_path} (fallback).")
             else:
-                s3_upload_prefix = (args.s3_results_prefix.rstrip('/') + '/' + run_name_base).lstrip('/')
-                upload_directory_to_s3(output_dir_for_run, args.s3_results_bucket, s3_upload_prefix)
-        
-        logging.info("Script execution complete.")
+                logging.warning(f"Early stopping triggered, but no best_model found at {best_model_path}. Saving current model as final.")
+                model.save_pretrained(final_model_path)
+                logging.info(f"Saved current model as final model to {final_model_path}")
+        else:
+            # If not stopped early, save the model at its current state
+            logging.info("Saving final model (not due to early stopping).")
+            model.save_pretrained(final_model_path)
+            logging.info(f"Saved final model to {final_model_path}")
+
+        # Upload results to S3 if configured
+        if args.upload_results_to_s3 and args.s3_bucket and args.s3_prefix:
+            logging.info(f"Uploading results from {output_dir_for_run} to S3 bucket {args.s3_bucket} with prefix {args.s3_prefix}...")
+            upload_directory_to_s3(output_dir_for_run, args.s3_bucket, args.s3_prefix)
+            
+            if args.delete_local_checkpoints_after_s3_upload:
+                logging.info("Deleting local checkpoint directories after S3 upload...")
+                if step_checkpoints_dir.exists():
+                    shutil.rmtree(step_checkpoints_dir)
+                    logging.info(f"Deleted local step checkpoints: {step_checkpoints_dir}")
+                if loss_ckpt_dir.exists(): # This is the one for "geom" / raw_val checkpoints
+                    shutil.rmtree(loss_ckpt_dir)
+                    logging.info(f"Deleted local loss checkpoints: {loss_ckpt_dir}")
+                if args.num_best_ema_val_checkpoints > 1 and top_ema_val_checkpoints_dir.exists():
+                    shutil.rmtree(top_ema_val_checkpoints_dir)
+                    logging.info(f"Deleted local top EMA validation checkpoints: {top_ema_val_checkpoints_dir}")
+                # Keep best_model and final_model locally for now, or add specific flags for them
+                # best_model_path = output_dir_for_run / "best_model"
+                # if best_model_path.exists():
+                #     shutil.rmtree(best_model_path)
+                #     logging.info(f"Deleted local best model: {best_model_path}")
+
+        if not args.disable_wandb and wandb.run is not None:
+            wandb.finish()
+            logging.info("Weights & Biases run finished.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train a Pythia model on ArXiv dataset for selected categories. Model is always randomly initialized.")
+    parser = argparse.ArgumentParser(description="Train a Causal Language Model on ArXiv data with category selection.")
 
-    # Paths and naming
-    parser.add_argument("--preprocessed_data_dir", type=Path, default=DEFAULT_PREPROCESSED_DIR, help="Directory with preprocessed data (tokens.bin, index.jsonl, splits.json).")
-    parser.add_argument("--output_dir", type=Path, default=Path("./training_output"), help="Root directory to save training outputs (logs, models).")
-    parser.add_argument("--run_suffix", type=str, default="", help="Optional suffix for the run name.")
+    # Path arguments
+    parser.add_argument("--preprocessed_data_dir", type=Path, default=DEFAULT_PREPROCESSED_DIR, help="Directory containing preprocessed data (tokens.bin, index.jsonl, splits.json).")
+    parser.add_argument("--output_dir", type=Path, default=Path("./training_output"), help="Root directory to save training outputs (models, logs).")
+    parser.add_argument("--run_suffix", type=str, default=None, help="Optional suffix to append to the run name and output directory.")
+
+    # Model and Tokenizer arguments
+    parser.add_argument("--model_name_or_path", type=str, default=DEFAULT_MODEL_NAME, help="Hugging Face model name or path to local model/config.")
     
-    # Model and Tokenizer
-    parser.add_argument("--model_name_or_path", type=str, default=DEFAULT_MODEL_NAME, help="Model name or path for AutoConfig (e.g., EleutherAI/pythia-70m-deduped). Model will be randomly initialized using this config.")
+    # Dataset and Dataloader arguments
+    parser.add_argument("--k", type=int, default=3, help="Number of categories to select for training.")
+    parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for model input.")
+    parser.add_argument("--num_workers", type=int, default=2, help="Number of workers for DataLoader. Set to 0 if experiencing issues with too many open files, especially on macOS.") # Updated default and help
 
-    # Category selection
-    parser.add_argument("-k", "--k", type=int, required=True, help="Number of categories to select for training (1 to 11).")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for category selection and training initialization.")
-
-    # Training hyperparameters
-    parser.add_argument("--epochs", type=int, default=2000, help="Maximum number of evaluation epochs to train for (where each evaluation epoch is defined by --steps_per_eval_epoch optimizer steps).")
-    parser.add_argument("--batch_size", type=int, default=8, help="Micro-batch size per device for training.")
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Initial learning rate for the AdamW optimizer.")
+    # Training configuration arguments
+    parser.add_argument("--precision", type=str, default="fp16", choices=["fp32", "fp16", "bf16"], help="Training precision.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size per device (micro-batch size). Effective batch size is batch_size * gradient_accumulation_steps.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of steps to accumulate gradients before an optimizer step.")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Initial learning rate.")
+    parser.add_argument("--lr_scheduler_type", type=str, default="cosine", help="Learning rate scheduler type (e.g., 'linear', 'cosine', 'constant').")
+    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps for the learning rate scheduler (applied to micro-steps).")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for AdamW optimizer.")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="AdamW beta1 parameter.")
     parser.add_argument("--adam_beta2", type=float, default=0.95, help="AdamW beta2 parameter.")
-    parser.add_argument("--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon parameter.")
-    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum norm for gradient clipping.")
-    parser.add_argument("--num_warmup_steps", type=int, default=0, help="Number of warmup steps (in optimizer steps) for the LR scheduler.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of micro-batches to accumulate gradients over before performing an optimizer step.")
-    parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for training samples.")
-    parser.add_argument("--steps_per_eval_epoch", type=int, required=True, help="Number of optimizer steps that constitute one 'evaluation epoch' for evaluation, LR scheduling, and early stopping.")
+    parser.add_argument("--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon parameter.") # User confirmed 1e-8 is okay for final runs
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum gradient norm for clipping.")
+    
+    # Epochs and Steps Arguments (Refactored for Evaluation Epochs)
+    parser.add_argument("--epochs", type=int, default=100, help="Maximum number of evaluation epochs to train for.") # Renamed from max_epochs_hard_limit
+    parser.add_argument("--steps_per_eval_epoch", type=int, default=100, help="Number of optimizer steps that constitute one 'evaluation epoch'. Evaluation and related actions (early stopping, LR reduction) happen after this many steps.")
 
-    # Modified help text for early stopping and ReduceLROnPlateau
-    parser.add_argument("--early_stopping_patience", type=int, default=30, help="Number of evaluation epochs to wait for EMA validation loss improvement before stopping.")
-    parser.add_argument("--early_stopping_delta", type=float, default=0.0, help="Minimum change in validation loss to qualify as an improvement for early stopping.")
-    parser.add_argument("--reduce_lr_factor", type=float, default=0.5, help="Factor by which the learning rate will be reduced by ReduceLROnPlateau.")
-    parser.add_argument("--reduce_lr_patience", type=int, default=10, help="Number of evaluation epochs with no validation loss improvement after which learning rate will be reduced.")
-    parser.add_argument("--min_lr", type=float, default=1e-6, help="Lower bound on the learning rate for ReduceLROnPlateau.")
+    # Logging arguments
+    parser.add_argument("--log_interval", type=int, default=100, help="Log training metrics every N optimizer steps.")
 
-    # EMA alpha for validation loss
-    parser.add_argument("--ema_val_loss_alpha", type=float, default=0.1, help="Smoothing factor for Exponential Moving Average of validation loss. Smaller alpha = more smoothing.")
+    # Checkpoint arguments
+    parser.add_argument("--checkpoint_interval_steps", type=int, default=1000, help="Save a checkpoint every N optimizer steps. 0 or negative to disable.")
+    parser.add_argument("--max_step_checkpoints", type=int, default=5, help="Maximum number of periodic step-based checkpoints to keep.")
+    
+    # Best EMA validation loss model checkpoints
+    parser.add_argument("--num_best_ema_val_checkpoints", type=int, default=1, help="Number of top models based on EMA validation loss to save. The single best is always saved to 'best_model/'. This saves additional ones to 'top_ema_val_checkpoints/'. Default 1 means no extra copies beyond 'best_model/'. Set to >1 to keep multiple (e.g., 5).")
 
-    # Dataloader and System
-    parser.add_argument("--num_workers", type=int, default=2,
-                        help="Number of worker processes for DataLoader. Default: 2. "
-                             "A higher number might speed up data loading but can lead to "
-                             "'Too many open files' errors with frequent evaluations. "
-                             "Try 0 for single-process loading if issues persist.")
+    # Geometric loss checkpoint arguments (now based on raw validation loss)
+    parser.add_argument("--max_loss_ckpts", type=int, default=0, help="Maximum number of loss-based checkpoints to keep (0 for unlimited, negative to disable). These are triggered by raw validation loss improvements.") # Clarified help for max_loss_ckpts
+    parser.add_argument("--geom_beta", type=float, default=0.95, help="Factor for raw validation loss improvement to trigger a loss-based checkpoint. Saves if current_raw_val_loss < best_raw_val_for_geom_checkpoints * geom_beta (e.g., 0.95 means 5% improvement needed).") # Updated help
+
+    # Early stopping arguments
+    parser.add_argument("--early_stopping_patience", type=int, default=20, help="Number of evaluation epochs with no improvement in EMA validation loss after which training will be stopped.")
+    parser.add_argument("--early_stopping_delta", type=float, default=0.0, help="Minimum change in EMA validation loss to qualify as an improvement for early stopping.")
+    
+    # ReduceLROnPlateau arguments
+    parser.add_argument("--reduce_lr_factor", type=float, default=1.0, help="Factor by which the learning rate will be reduced by ReduceLROnPlateau (1.0 effectively disables it).") # Default 1.0
+    parser.add_argument("--reduce_lr_patience", type=int, default=10, help="Number of evaluation epochs with no EMA validation loss improvement after which learning rate will be reduced (if factor < 1.0).")
+    parser.add_argument("--min_lr", type=float, default=1e-7, help="Minimum learning rate for ReduceLROnPlateau.")
+
+
+    # Miscellaneous arguments
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     parser.add_argument("--force_cpu", action="store_true", help="Force training on CPU even if CUDA is available.")
-    parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Training precision (default: fp32). bf16 recommended for A100 if stable.")
-
-    # Logging and Checkpointing
-    parser.add_argument("--log_interval", type=int, default=100, help="Log training loss every N optimizer steps.") 
-    parser.add_argument("--checkpoint_interval_steps", type=int, default=0, help="Save checkpoint every N optimizer steps. 0 to disable step checkpointing. Checkpoints are saved only if global_optimizer_step > 0.")
-    parser.add_argument("--max_step_checkpoints", type=int, default=3, help="Maximum number of step-based checkpoints to keep. 0 for unlimited.")
-
-    # Geometric loss checkpoint arguments
-    parser.add_argument("--geom_alpha", type=float, default=0.90, help="Save checkpoint when EMA of train loss <= alpha * last-saved EMA.")
-    parser.add_argument("--geom_beta", type=float, default=0.95, help="EMA smoothing constant for geometric loss checkpointing.")
-    parser.add_argument("--max_loss_ckpts", type=int, default=20, help="Maximum number of geometric loss-based checkpoints to keep. 0 for unlimited.")
-
+    
     # W&B arguments
-    parser.add_argument("--wandb_project", type=str, default="icl-non-ergodic-arxiv", help="Weights & Biases project name.")
-    parser.add_argument("--wandb_entity", type=str, default=None, help="Weights & Biases entity (username or team).")
-    parser.add_argument("--wandb_run_name", type=str, default=None, help="Custom run name for Weights & Biases.")
     parser.add_argument("--disable_wandb", action="store_true", help="Disable Weights & Biases logging.")
+    parser.add_argument("--wandb_project", type=str, default="icl-non-ergodic-arxiv", help="Weights & Biases project name.")
+    parser.add_argument("--wandb_entity", type=str, default=None, help="Weights & Biases entity (username or team). Optional.")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="Custom run name for Weights & Biases. If None, a name is generated.")
 
     # S3 Upload arguments
-    parser.add_argument("--upload_results_to_s3", action="store_true", help="Upload final results directory to S3.")
-    parser.add_argument("--s3_results_bucket", type=str, default=None, help="S3 bucket name for uploading results.")
-    parser.add_argument("--s3_results_prefix", type=str, default="training_runs/", help="S3 prefix (folder) for uploading results.")
-    
+    parser.add_argument("--upload_results_to_s3", action="store_true", help="Upload final results and checkpoints to S3.")
+    parser.add_argument("--s3_bucket", type=str, default=os.getenv("S3_RESULTS_BUCKET"), help="S3 bucket for uploading results.")
+    parser.add_argument("--s3_prefix", type=str, default=os.getenv("S3_RESULTS_PREFIX"), help="S3 prefix (folder path) for uploading results within the bucket.")
+    parser.add_argument("--delete_local_checkpoints_after_s3_upload", action="store_true", help="Delete local step_checkpoints and loss_checkpoints directories after successful S3 upload to save space.")
+
+
     args = parser.parse_args()
 
-    if not 1 <= args.k <= len(ALL_CATEGORIES):
-        parser.error(f"K must be between 1 and {len(ALL_CATEGORIES)}. Got {args.k}.")
+    # Further refine help text for clarity based on final decision for max_loss_ckpts
+    # If args.max_loss_ckpts is 0, it means unlimited. If negative, it's disabled.
+    # The current help text says "0 for unlimited, negative to disable".
+    # The code for triggering uses `if args.max_loss_ckpts >= 0:`. This means 0 IS unlimited, and negative values disable it. This is consistent.
+
+    # Update Adam Epsilon if needed based on notes.md or specific run script settings
+    # From notes.md, the NaN was due to 1e-8 with Pythia on first step, changed to 1e-6 for stability.
+    # However, scripts/run_multi_gpu_final.sh has ADAM_EPSILON=1e-8
+    # For final runs, user confirmed 1e-8 is okay. So default 1e-8 in parser is fine.
 
     train(args) 

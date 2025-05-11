@@ -155,3 +155,19 @@ The `RandomWindowDataset` has been significantly hardened and a smoke test confi
 **Next Steps:**
 *   Run the full training script (`scripts/run_full_training_plan.sh`) on the Colab GPU environment with the updated `random_window_dataset.py`.
 *   Observe if the NaN issue at micro-step 8 is resolved. 
+
+## 2024-05-10: Refactor Epoch Definition and Create Final Multi-GPU Script
+
+**Task:** Create `run_multi_gpu_final.sh` to iterate through multiple random seeds and a fixed set of 5 `K` values. Disable ReduceLROnPlateau scheduler.
+
+**Key Decisions/Plan:**
+*   The new script `run_multi_gpu_final.sh` will be based on `run_multi_gpu_training_plan.sh`.
+*   It will loop through specified random seeds.
+*   For each seed, it will loop through 5 specified `K` values.
+*   The `ReduceLROnPlateau` learning rate scheduler will be disabled by passing `--reduce_lr_factor 1.0` to `train.py`.
+*   `MAX_EVAL_EPOCHS` in the script will remain the primary control for the number of evaluation periods.
+*   `STEPS_PER_EVAL_EPOCH` will define the duration of each evaluation epoch.
+
+**Pending Information from User:**
+*   Specific 5 values of `K`.
+*   List or range of random seeds. 
