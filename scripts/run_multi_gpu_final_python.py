@@ -11,6 +11,8 @@ from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import shutil
+import boto3 # Added for S3 uploads
+from botocore.exceptions import ClientError # Added for S3 error handling
 
 # --- Configuration (Mirrors settings from the .sh script) ---
 # --- Core Hyperparameters ---
@@ -207,22 +209,73 @@ def run_single_train_job(job_config: Dict[str, Any], gpu_id: int, overall_run_di
         
     return job_config, success
 
-
-def upload_to_s3(local_path: Path, s3_bucket: str, s3_prefix: str, is_recursive: bool = False):
-    cmd = ["aws", "s3", "cp"]
-    if is_recursive:
-        cmd.append("--recursive")
-    cmd.extend([str(local_path), f"s3://{s3_bucket}/{s3_prefix}"])
-    
+def upload_to_s3(local_path_str: str, bucket: str, s3_prefix: str, is_recursive: bool = False):
+    """Uploads a file or directory to S3 using boto3."""
+    local_path = Path(local_path_str)
     try:
-        log_print(f"Uploading {'directory' if is_recursive else 'file'} {local_path} to s3://{s3_bucket}/{s3_prefix}")
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-        log_print(f"Successfully uploaded {local_path} to s3://{s3_bucket}/{s3_prefix}")
-    except subprocess.CalledProcessError as e:
-        log_print(f"Failed to upload {local_path} to S3. Error: {e.stderr}")
-    except FileNotFoundError:
-        log_print(f"AWS CLI not found. Skipping S3 upload for {local_path}.")
+        s3_client = boto3.client('s3')
+    except Exception as e:
+        log_print(f"Failed to create S3 client, skipping upload for {local_path}. Check credentials/config. Error: {e}")
+        return
 
+    if is_recursive:
+        if not local_path.is_dir():
+            log_print(f"Error: {local_path} is not a directory, but recursive upload was requested. Skipping.")
+            return
+        
+        log_print(f"Attempting to upload contents of directory {local_path} to s3://{bucket}/{s3_prefix}")
+        num_uploaded = 0
+        num_failed = 0
+
+        for root, _, files in os.walk(local_path):
+            for filename in files:
+                file_local_path = Path(root) / filename
+                relative_path = file_local_path.relative_to(local_path)
+                # ensure s3_prefix doesn't have leading/trailing slashes that cause issues with join
+                current_s3_prefix = s3_prefix.strip('/') 
+                s3_key = f"{current_s3_prefix}/{relative_path.as_posix()}"
+                
+                try:
+                    # log_print(f"Uploading {file_local_path} to {s3_key}...") # Can be too verbose
+                    s3_client.upload_file(str(file_local_path), bucket, s3_key)
+                    num_uploaded += 1
+                except ClientError as e:
+                    log_print(f"Failed to upload {file_local_path} to S3: {e}")
+                    num_failed += 1
+                except Exception as e:
+                    log_print(f"An unexpected error occurred during upload of {file_local_path}: {e}")
+                    num_failed += 1
+        
+        if num_failed == 0 and num_uploaded > 0:
+            log_print(f"Successfully uploaded {num_uploaded} files from {local_path} to s3://{bucket}/{s3_prefix}")
+        elif num_uploaded > 0:
+            log_print(f"Completed upload attempt from {local_path} to s3://{bucket}/{s3_prefix} with {num_uploaded} successes and {num_failed} failures.")
+        elif num_failed > 0:
+            log_print(f"All {num_failed} file uploads failed from {local_path} to s3://{bucket}/{s3_prefix}.")
+        else:
+            log_print(f"No files found to upload in {local_path} for s3://{bucket}/{s3_prefix}.")
+
+    else: # Single file upload
+        if not local_path.is_file():
+            log_print(f"Error: {local_path} is not a file. Skipping single file upload.")
+            return
+        
+        # ensure s3_prefix doesn't have leading/trailing slashes that cause issues with join
+        # For a single file, s3_prefix is often the full desired key, or a dir prefix + filename
+        # Let's assume s3_prefix is the target key or a prefix to which filename should be appended.
+        # If s3_prefix ends with a slash, or is empty, append filename. Otherwise, it's treated as the full key.
+        s3_key = s3_prefix 
+        if not s3_key or s3_key.endswith('/'):
+            s3_key = f"{s3_prefix.strip('/')}/{local_path.name}" 
+        
+        log_print(f"Attempting to upload file {local_path} to s3://{bucket}/{s3_key}")
+        try:
+            s3_client.upload_file(str(local_path), bucket, s3_key)
+            log_print(f"Successfully uploaded {local_path} to s3://{bucket}/{s3_key}")
+        except ClientError as e:
+            log_print(f"Failed to upload {local_path} to S3: {e}")
+        except Exception as e:
+            log_print(f"An unexpected error occurred during upload of {local_path}: {e}")
 
 def main():
     # --- Initial Setup ---
