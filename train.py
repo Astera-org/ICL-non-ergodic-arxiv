@@ -706,7 +706,7 @@ def train(args: argparse.Namespace):
                 
                 if raw_val_loss is None or not np.isfinite(raw_val_loss): # Check for finite raw_val_loss
                     logging.warning(f"Validation loss is NaN or Inf at eval epoch {current_eval_epoch}. Skipping best model/early stopping/loss-checkpoint logic for this epoch.")
-                    else:
+                else:
                     # Update EMA of validation loss (for best_model checkpointing and ReduceLROnPlateau)
                     if best_ema_val_loss == float('inf'): # First validation
                         current_ema_val_loss = raw_val_loss
@@ -813,8 +813,6 @@ def train(args: argparse.Namespace):
                 plateau_scheduler.step(ema_val_loss_for_plateau_scheduler)
             elif not val_dataloader:
                 logging.debug("No validation dataloader, skipping ReduceLROnPlateau scheduler step.")
-                else:
-                logging.warning("EMA validation loss is not finite, skipping ReduceLROnPlateau scheduler step.")
 
 
             # Early stopping check (based on EMA validation loss and eval epochs)
@@ -871,15 +869,18 @@ def train(args: argparse.Namespace):
                     logging.error(f"Could not reload and save best_model as final_model. Saving current model instead. Error: {e_reload_save}")
                     model.save_pretrained(final_model_path) # Fallback to current model
                     logging.info(f"Saved current model as final model to {final_model_path} (fallback).")
-             else:
+            else:
                 logging.warning(f"Early stopping triggered, but no best_model found at {best_model_path}. Saving current model as final.")
                 model.save_pretrained(final_model_path)
                 logging.info(f"Saved current model as final model to {final_model_path}")
-                else:
-            # If not stopped early, save the model at its current state
-            logging.info("Saving final model (not due to early stopping).")
+        else:
+            # Training completed normally or crashed before early stopping was determined
+            # If training crashed, 'model' might be in an intermediate state, but it's the last state we have.
+            # If training completed normally, 'model' is the final trained model.
+            logging.info(f"Training did not stop early (or crashed). Saving current model state as final_model to {final_model_path}")
             model.save_pretrained(final_model_path)
-            logging.info(f"Saved final model to {final_model_path}")
+            logging.info(f"Saved current model as final model to {final_model_path}")
+
 
         # Upload results to S3 if configured
         if args.upload_results_to_s3 and args.s3_bucket and args.s3_prefix:
