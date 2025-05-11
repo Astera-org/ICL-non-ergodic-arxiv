@@ -319,9 +319,10 @@ def evaluate(model: AutoModelForCausalLM, dataloader: DataLoader, device: torch.
                 per_token_counts[1 : actual_prediction_len + 1] += input_ids.size(0) # Add batch_size for these positions
 
     avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
-    if not args.disable_wandb:
-        # This logs the overall average validation loss for the evaluation epoch
-        wandb.log({"eval/eval_epoch_val_loss": avg_loss, "eval_epoch": current_epoch}) # Changed from "epoch" to "eval_epoch"
+    # Remove direct W&B logging from evaluate; caller will handle it.
+    # if not args.disable_wandb:
+    #     # This logs the overall average validation loss for the evaluation epoch
+    #     wandb.log({"eval/eval_epoch_val_loss": avg_loss, "eval_epoch": current_epoch}) # Changed from "epoch" to "eval_epoch"
     
     per_token_avg_losses_list = None
     if calculate_per_token_loss and per_token_losses_sum is not None and per_token_counts is not None:
