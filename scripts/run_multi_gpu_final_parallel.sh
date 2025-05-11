@@ -220,11 +220,12 @@ echo "Individual train.py outputs will be in subdirectories of: $PARALLEL_JOB_LO
 # The subshell ensures that CUDA_VISIBLE_DEVICES is set correctly for each job instance
 # and that its output is redirected.
 cat "$COMMANDS_FILE" | parallel \
+    --env NUM_GPUS \
     --jobs "$NUM_GPUS" \
     --joblog "${LOCAL_OVERALL_RUN_DIR}/parallel_master_joblog.txt" \
     --eta \
-    --tagstring "[Job {#}/{=N=}, GPU {=((\${PARALLEL_JOB_SLOT} - 1) % ${NUM_GPUS})=}]" \
-    'GPUNUM=$(( (PARALLEL_JOB_SLOT - 1) % NUM_GPUS )); \
+    --tagstring "[Job {#}/{=N=}, GPU {=((\${PARALLEL_JOB_SLOT} - 1) % \$NUM_GPUS)=}]" \
+    'GPUNUM=$(( (PARALLEL_JOB_SLOT - 1) % $NUM_GPUS )); \
      K_SEED_INFO=$(echo {} | grep -o -E "k [0-9]+.*seed [0-9]+" | sed "s/k //g" | sed "s/ seed /_s/g"); \
      LOG_FILENAME="run_${K_SEED_INFO}_gpu${GPUNUM}_job{#}.log"; \
      LOG_FILEPATH="${PARALLEL_JOB_LOG_DIR}/${LOG_FILENAME}"; \
@@ -233,6 +234,7 @@ cat "$COMMANDS_FILE" | parallel \
      (export CUDA_VISIBLE_DEVICES=${GPUNUM}; {}) > "${LOG_FILEPATH}" 2>&1'
 
 # Explanation of the parallel command:
+# --env NUM_GPUS: Pass NUM_GPUS to the command string.
 # --jobs "$NUM_GPUS": Run this many jobs in parallel. Same as -j.
 # --joblog: Detailed log from parallel itself about job start/end times, exit codes.
 # --eta: Estimate time of completion.
