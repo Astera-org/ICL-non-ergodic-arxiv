@@ -432,7 +432,8 @@ def train(args: argparse.Namespace):
             preprocessed_dir=preprocessed_data_path,
             split="validation",
             target_categories=selected_train_categories, # Use same categories for validation
-            sequence_length=args.sequence_length # Pass sequence length
+            sequence_length=args.sequence_length, # Pass sequence length
+            eval_multiplier=args.eval_dataset_multiplier # Pass multiplier
         )
     except FileNotFoundError:
         logging.error(f"Preprocessed data not found in {preprocessed_data_path}. Please run fetch_arxiv.py first.")
@@ -493,6 +494,15 @@ def train(args: argparse.Namespace):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     logging.info(f"Using device: {device}")
     model.to(device)
+
+    # --- Save Initial Model --- 
+    initial_model_save_path = output_dir_for_run / "initial_model"
+    try:
+        model.save_pretrained(initial_model_save_path)
+        logging.info(f"Saved initial model state to {initial_model_save_path}")
+    except Exception as e_save_initial:
+        logging.error(f"Failed to save initial model: {e_save_initial}")
+    # --- End Save Initial Model ---
 
     # --- Initial/Manual Embedding Weight Init & Check ---
     try:
@@ -938,6 +948,7 @@ if __name__ == "__main__":
     parser.add_argument("--k", type=int, default=3, help="Number of categories to select for training.")
     parser.add_argument("--sequence_length", type=int, default=256, help="Sequence length for model input.")
     parser.add_argument("--num_workers", type=int, default=2, help="Number of workers for DataLoader. Set to 0 if experiencing issues with too many open files, especially on macOS.") # Updated default and help
+    parser.add_argument("--eval_dataset_multiplier", type=int, default=1, help="Multiplier for the effective size of the validation dataset.")
 
     # Training configuration arguments
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp32", "fp16", "bf16"], help="Training precision.")

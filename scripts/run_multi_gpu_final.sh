@@ -19,7 +19,7 @@ echo "Starting final experiment run with timestamp: $EXPERIMENT_TIMESTAMP"
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
 LEARNING_RATE="0.0003"
-LR_SCHEDULE_TYPE="constant" # Changed from commented "cosine"
+LR_SCHEDULE_TYPE="constant_with_warmup" # Changed from "constant"
 NUM_WARMUP_STEPS=200
 WEIGHT_DECAY=0.01
 GRADIENT_ACCUMULATION_STEPS=32
@@ -255,6 +255,7 @@ while [[ $completed_job_count -lt $TOTAL_JOBS ]]; do
                     --s3_prefix "${S3_OVERALL_RUN_PREFIX}/${JOB_SPECIFIC_RUN_SUFFIX}" \
                     --delete_local_checkpoints_after_s3_upload \
                     --num_best_ema_val_checkpoints 5 \
+                    --eval_dataset_multiplier 3 \
                     # --force_cpu # Ensure this is not set for GPU runs
                     # --disable_wandb # Ensure this is not set
                   set +x

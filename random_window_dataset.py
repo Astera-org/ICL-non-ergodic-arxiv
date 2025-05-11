@@ -16,7 +16,8 @@ class RandomWindowDataset(Dataset):
                  preprocessed_dir: Path = DEFAULT_PREPROCESSED_DIR,
                  split: str = "train",
                  target_categories: Optional[List[str]] = None,
-                 sequence_length: int = 256):
+                 sequence_length: int = 256,
+                 eval_multiplier: int = 1):
         """
         Dataset for loading random token windows from the preprocessed arXiv data.
 
@@ -26,11 +27,13 @@ class RandomWindowDataset(Dataset):
             target_categories (Optional[List[str]]): If provided, only sample from papers 
                                                      belonging to these categories.
             sequence_length (int): The desired length of token sequences (input part) to return.
+            eval_multiplier (int): Multiplier for the effective length of validation/test sets.
         """
         self.preprocessed_dir = Path(preprocessed_dir)
         self.split = split
         self.target_categories = set(target_categories) if target_categories else None
         self.sequence_length = sequence_length # Store sequence length (this is for the input x, target y will be derived)
+        self.eval_multiplier = eval_multiplier # Store eval_multiplier
         self.vocab_size = 50_304 # Pythia vocab size
 
         tokens_bin_path = self.preprocessed_dir / "tokens.bin"
@@ -87,6 +90,8 @@ class RandomWindowDataset(Dataset):
         print(f"Initialized RandomWindowDataset for {pool_info_str}")
 
     def __len__(self):
+        if self.split == "validation" or self.split == "test":
+            return len(self.pool) * self.eval_multiplier
         return len(self.pool) # Number of documents available for sampling
 
     def _sample_window(self, paper_record: Dict) -> torch.LongTensor:
