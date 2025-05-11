@@ -19,7 +19,7 @@ echo "Starting final experiment run with timestamp: $EXPERIMENT_TIMESTAMP"
 MODEL_NAME_OR_PATH="EleutherAI/pythia-70m-deduped"
 BATCH_SIZE=16
 LEARNING_RATE="0.0003"
-# LR_SCHEDULE_TYPE="cosine" # Intentionally kept commented
+LR_SCHEDULE_TYPE="constant" # Changed from commented "cosine"
 NUM_WARMUP_STEPS=200
 WEIGHT_DECAY=0.01
 GRADIENT_ACCUMULATION_STEPS=32
@@ -225,6 +225,7 @@ while [[ $completed_job_count -lt $TOTAL_JOBS ]]; do
                     --batch_size "$BATCH_SIZE" \
                     --sequence_length "$SEQUENCE_LENGTH" \
                     --learning_rate "$LEARNING_RATE" \
+                    --lr_scheduler_type "$LR_SCHEDULE_TYPE" \
                     --num_warmup_steps "$NUM_WARMUP_STEPS" \
                     --weight_decay "$WEIGHT_DECAY" \
                     --gradient_accumulation_steps "$GRADIENT_ACCUMULATION_STEPS" \

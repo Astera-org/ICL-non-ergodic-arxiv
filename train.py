@@ -567,7 +567,7 @@ def train(args: argparse.Namespace):
         factor=args.reduce_lr_factor,
         patience=args.reduce_lr_patience,
         min_lr=args.min_lr,
-        verbose=True
+        #verbose=True
     )
     logging.info(f"ReduceLROnPlateau scheduler configured with factor={args.reduce_lr_factor}, patience={args.reduce_lr_patience}, min_lr={args.min_lr}.")
 
