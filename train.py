@@ -559,17 +559,20 @@ def train(args: argparse.Namespace):
     epochs_since_last_best_ema_val_loss = 0 # For early stopping based on eval epochs
     # Note: The single best_model/ checkpoint is handled separately from the top_N list.
     
-    # For ReduceLROnPlateau (if used, though factor=1.0 disables it in current plan)
-    # This scheduler operates on evaluation epochs and EMA validation loss.
-    plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=args.reduce_lr_factor,
-        patience=args.reduce_lr_patience,
-        min_lr=args.min_lr,
-        #verbose=True
-    )
-    logging.info(f"ReduceLROnPlateau scheduler configured with factor={args.reduce_lr_factor}, patience={args.reduce_lr_patience}, min_lr={args.min_lr}.")
+    # For ReduceLROnPlateau
+    plateau_scheduler = None
+    if args.reduce_lr_factor < 1.0:
+        plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=args.reduce_lr_factor,
+            patience=args.reduce_lr_patience,
+            min_lr=args.min_lr,
+            verbose=True # Enable verbose output if scheduler is active
+        )
+        logging.info(f"ReduceLROnPlateau scheduler ACTIVATED with factor={args.reduce_lr_factor}, patience={args.reduce_lr_patience}, min_lr={args.min_lr}.")
+    else:
+        logging.info(f"ReduceLROnPlateau scheduler DISABLED (factor={args.reduce_lr_factor} >= 1.0).")
 
 
     # 5. Training Loop
@@ -809,10 +812,12 @@ def train(args: argparse.Namespace):
 
 
             # Step the ReduceLROnPlateau scheduler with EMA validation loss
-            if val_dataloader and np.isfinite(ema_val_loss_for_plateau_scheduler): # ensure it's a finite number
+            if plateau_scheduler and val_dataloader and np.isfinite(ema_val_loss_for_plateau_scheduler): # ensure it's a finite number
                 plateau_scheduler.step(ema_val_loss_for_plateau_scheduler)
             elif not val_dataloader:
                 logging.debug("No validation dataloader, skipping ReduceLROnPlateau scheduler step.")
+            elif not plateau_scheduler:
+                logging.debug("ReduceLROnPlateau scheduler is disabled, skipping step.")
 
 
             # Early stopping check (based on EMA validation loss and eval epochs)
