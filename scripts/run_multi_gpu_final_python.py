@@ -133,7 +133,8 @@ def run_single_train_job(job_config: Dict[str, Any], gpu_id: int, overall_run_di
     log_filepath = script_log_dir / log_filename
 
     # Determine path to train.py relative to this script
-    train_script_path = Path(__file__).parent / "train.py"
+    # Assumes this script is in 'scripts/' and train.py is in the project root (parent of 'scripts/')
+    train_script_path = Path(__file__).parent.parent / "train.py"
 
     cmd = [
         sys.executable, str(train_script_path), # Use explicit path to train.py
