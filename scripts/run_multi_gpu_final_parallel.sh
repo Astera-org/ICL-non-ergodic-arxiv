@@ -223,7 +223,7 @@ cat "$COMMANDS_FILE" | parallel \
     --jobs "$NUM_GPUS" \
     --joblog "${LOCAL_OVERALL_RUN_DIR}/parallel_master_joblog.txt" \
     --eta \
-    --tagstring "[Job {#}/{=टल=}, GPU {=((\${PARALLEL_JOB_SLOT} - 1) % ${NUM_GPUS})=}]" \
+    --tagstring "[Job {#}/{=N=}, GPU {=((\${PARALLEL_JOB_SLOT} - 1) % ${NUM_GPUS})=}]" \
     'GPUNUM=$(( (PARALLEL_JOB_SLOT - 1) % NUM_GPUS )); \
      K_SEED_INFO=$(echo {} | grep -o -E "k [0-9]+.*seed [0-9]+" | sed "s/k //g" | sed "s/ seed /_s/g"); \
      LOG_FILENAME="run_${K_SEED_INFO}_gpu${GPUNUM}_job{#}.log"; \
@@ -236,7 +236,7 @@ cat "$COMMANDS_FILE" | parallel \
 # --jobs "$NUM_GPUS": Run this many jobs in parallel. Same as -j.
 # --joblog: Detailed log from parallel itself about job start/end times, exit codes.
 # --eta: Estimate time of completion.
-# --tagstring: Custom prefix for each job's output from parallel itself. {#} is job sequence number, {=टल=} is total jobs.
+# --tagstring: Custom prefix for each job's output from parallel itself. {#} is job sequence number, {=N=} is total jobs.
 # The command string executed for each line from COMMANDS_FILE (which is represented by {}):
 #   GPUNUM=\$(( (PARALLEL_JOB_SLOT - 1) % NUM_GPUS )): Assign GPU ID (0 to NUM_GPUS-1).
 #   K_SEED_INFO=...: Extract K and Seed from the command string for a more descriptive log filename.
