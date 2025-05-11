@@ -58,7 +58,7 @@ echo "Overall output directory for this script execution: $LOCAL_OVERALL_RUN_DIR
 
 # Experiment Grid
 K_VALUES_TO_ITERATE=(1 3 5 8 11) # Define K values to iterate over
-SEED_VALUES_TO_ITERATE=(1 2 3)   # Define SEED values to iterate over
+SEED_VALUES_TO_ITERATE=(0 1 2 3)   # Define SEED values to iterate over
 RUN_SUFFIX_BASE="final_multi_gpu"  # Base suffix for job-specific part, distinguishes from old "multi_gpu_plan_seed0"
 
 # S3 Configuration
