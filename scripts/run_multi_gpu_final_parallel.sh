@@ -125,6 +125,7 @@ elif [[ "$NUM_GPUS_DETECTED" -eq 0 ]]; then
 else
     NUM_GPUS=$NUM_GPUS_DETECTED
 fi
+export NUM_GPUS # Ensure NUM_GPUS is in the environment for parallel
 echo "Will use $NUM_GPUS GPU slot(s) for parallel execution via GNU Parallel."
 
 # --- Directory for individual job logs from GNU Parallel ---
@@ -224,7 +225,7 @@ cat "$COMMANDS_FILE" | parallel \
     --jobs "$NUM_GPUS" \
     --joblog "${LOCAL_OVERALL_RUN_DIR}/parallel_master_joblog.txt" \
     --eta \
-    --tagstring "[Job {#}/{=N=}, GPU {=((\${PARALLEL_JOB_SLOT} - 1) % \$NUM_GPUS)=}]" \
+    --tagstring "[Job {#}/{=N=}, GPU {= (\$slot-1) % \$ENV{NUM_GPUS} =}]" \
     'GPUNUM=$(( (PARALLEL_JOB_SLOT - 1) % $NUM_GPUS )); \
      K_SEED_INFO=$(echo {} | grep -o -E "k [0-9]+.*seed [0-9]+" | sed "s/k //g" | sed "s/ seed /_s/g"); \
      LOG_FILENAME="run_${K_SEED_INFO}_gpu${GPUNUM}_job{#}.log"; \
