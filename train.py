@@ -613,7 +613,9 @@ def train(args: argparse.Namespace):
                         train_dataloader_iter = iter(train_dataloader)
                         batch = next(train_dataloader_iter)
                     
-                    input_ids = batch['input_ids'].to(device)
+                    # Assuming batch is the tensor itself due to IndexError
+                    # input_ids = batch['input_ids'].to(device) 
+                    input_ids = batch.to(device)
                     labels = input_ids.clone() # For causal LM, labels are usually input_ids shifted
 
                     # Forward pass with autocast if precision is not fp32
@@ -856,14 +858,21 @@ def train(args: argparse.Namespace):
     finally:
         # Save final model
         final_model_path = output_dir_for_run / "final_model"
-        if "stopped_early" in wandb.summary and wandb.summary["stopped_early"]:
-            # If stopped early, the best_model is the one to save as final
+        
+        should_save_best_model_as_final = False
+        if not args.disable_wandb and wandb.run is not None:
+            # Safely check wandb.summary for early stopping information
+            try:
+                if wandb.summary.get("stopped_early", False): # Use .get for safety
+                    should_save_best_model_as_final = True
+            except Exception as e_summary_check:
+                logging.warning(f"Could not access wandb.summary for early stopping check: {e_summary_check}. Proceeding to save current model.")
+
+        if should_save_best_model_as_final:
+            # If stopped early (and W&B summary was accessible), the best_model is the one to save as final
             best_model_path = output_dir_for_run / "best_model"
             if best_model_path.exists():
-                logging.info(f"Early stopping: Using best model from {best_model_path} as the final model.")
-                # We can either copy or just consider it the final one. For clarity, let's save it again to "final_model"
-                # shutil.copytree(best_model_path, final_model_path, dirs_exist_ok=True) # Option: copy
-                # Or, reload and save:
+                logging.info(f"Early stopping indicated: Using best model from {best_model_path} as the final model.")
                 try:
                     logging.info(f"Reloading best model from {best_model_path} to save as final model.")
                     reloaded_best_model_config = AutoConfig.from_pretrained(best_model_path)
@@ -874,15 +883,14 @@ def train(args: argparse.Namespace):
                     logging.error(f"Could not reload and save best_model as final_model. Saving current model instead. Error: {e_reload_save}")
                     model.save_pretrained(final_model_path) # Fallback to current model
                     logging.info(f"Saved current model as final model to {final_model_path} (fallback).")
-            else:
-                logging.warning(f"Early stopping triggered, but no best_model found at {best_model_path}. Saving current model as final.")
+            else: # This else corresponds to 'if best_model_path.exists():'
+                logging.warning(f"Early stopping indicated, but no best_model found at {best_model_path}. Saving current model as final.")
                 model.save_pretrained(final_model_path)
                 logging.info(f"Saved current model as final model to {final_model_path}")
         else:
-            # Training completed normally or crashed before early stopping was determined
-            # If training crashed, 'model' might be in an intermediate state, but it's the last state we have.
-            # If training completed normally, 'model' is the final trained model.
-            logging.info(f"Training did not stop early (or crashed). Saving current model state as final_model to {final_model_path}")
+            # Training completed normally, crashed before early stopping determination, W&B disabled, or W&B summary access failed.
+            # Save current model state.
+            logging.info(f"Not using best_model from early stopping (or info unavailable). Saving current model state as final_model to {final_model_path}")
             model.save_pretrained(final_model_path)
             logging.info(f"Saved current model as final model to {final_model_path}")
 
