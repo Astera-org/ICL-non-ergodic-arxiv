@@ -116,7 +116,9 @@ def save_overall_metadata(overall_run_dir: Path, experiment_timestamp: str, git_
 def get_num_gpus() -> int:
     try:
         result = subprocess.run(["nvidia-smi", "--query-gpu=count", "--format=csv,noheader"], capture_output=True, text=True, check=True)
-        return int(result.stdout.strip())
+        # Take the first line of the output, strip whitespace, then convert to int
+        first_line = result.stdout.strip().split('\n')[0]
+        return int(first_line)
     except (FileNotFoundError, subprocess.CalledProcessError, ValueError) as e:
         log_print(f"nvidia-smi not found or failed, or parsing failed. Defaulting to 1 GPU. Error: {e}")
         return 1
