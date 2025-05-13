@@ -17,6 +17,8 @@ This project investigates the scaling properties of ergodic components in langua
 - `preprocessed_arxiv/`: Default directory for storing processed data from `fetch_arxiv.py`. (Gitignored)
 - `training_output/`: Default directory for storing training artifacts (logs, model checkpoints). (Gitignored)
 - `data_cache_raw_arxiv/`: Default cache directory for the raw Hugging Face dataset. (Gitignored)
+- `analysis/`: Directory containing scripts and notebooks for analyzing experiment results.
+    - `analysis/analysis_script.py`: Main Python script for conducting the analysis, structured with VS Code cells for interactive execution. It will handle S3 interactions, data loading, model evaluation, and results visualization.
 
 ## Setup
 

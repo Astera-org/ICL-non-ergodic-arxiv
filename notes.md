@@ -171,3 +171,50 @@ The `RandomWindowDataset` has been significantly hardened and a smoke test confi
 **Pending Information from User:**
 *   Specific 5 values of `K`.
 *   List or range of random seeds. 
+
+## Current Task
+- **Task 1: Initialize Project Structure and Main Analysis Script** (Completed)
+  - Created `analysis/` directory (already existed).
+  - Created `analysis/analysis_script.py` with initial comments and VS Code cell structure.
+- **Task 2: Implement S3 Training Run Listing Function** (Completed)
+  - Added `list_s3_training_runs` function to `analysis/analysis_script.py`.
+  - Tested function by running the script; it successfully listed 20 training runs from the specified S3 path.
+- **Task 3: Implement S3 Training Run Metadata Retrieval** (Completed)
+  - Added `get_train_run_metadata` function to `analysis/analysis_script.py`.
+  - Function successfully retrieves and parses `_args.json` and `.log` files (for training categories) from S3 for each run.
+  - Also identifies paths to model configuration and weight files in `best_model/`.
+  - Tested by running the script; metadata was correctly extracted for sample runs.
+- **Task 4: Implement On-Demand S3 File Downloading Function** (Completed)
+  - Added `get_train_run_model_files` function to `analysis/analysis_script.py`.
+  - This function downloads specified files from S3 (args, log, model config, model weights) and saves them locally under `analysis/downloaded_data/` preserving S3 path structure.
+  - Tested by running the script; essential files for a sample run were successfully downloaded and verified.
+- **Task 5: Implement Hugging Face Model and Tokenizer Loading** (Completed)
+  - Added `load_model_and_tokenizer` function to `analysis/analysis_script.py`.
+  - This function loads a Hugging Face model from a local path (e.g., downloaded `best_model/` directory) and its corresponding tokenizer using the `model_name_or_path` from the run's `_args.json` file.
+  - Tested by running the script; model and tokenizer were successfully loaded for a sample run.
+- **Task 6: Develop Test Data Preparation and Dataloader Function** (Completed)
+  - Refactored `create_test_dataloader` function in `analysis/analysis_script.py` to use `RandomWindowDataset`.
+  - This function now leverages the preprocessed ArXiv data (e.g., "validation" split) to create a dataloader yielding batches of token sequences.
+  - Tested by running the script; it successfully created a dataloader and sample batches were inspected.
+- **Task 7: Implement Core Per-Token Cross-Entropy Loss Calculation** (Completed)
+  - Added `calculate_per_token_loss` function to `analysis/analysis_script.py`.
+  - This function takes a model and tokenized input_ids, performs a forward pass, and calculates the cross-entropy loss for each token predicting the next token.
+  - Handles shifting logits and labels correctly for next-token prediction.
+  - Tested by running the script; per-token losses were successfully calculated for a sample batch from the test dataloader, and the output shape was verified.
+- **Task 8: Implement 'get_in_context_loss' Function for Full Evaluation** (Completed)
+  - Added `get_in_context_loss` function to `analysis_script.py`.
+  - This function iterates through a test dataloader, calls `calculate_per_token_loss` for each batch, and collects all per-sequence loss profiles.
+  - Tested by running the script; it successfully processed all batches from the test dataloader, collected the correct number of loss profiles (matching dataset size), and verified the shape of individual profiles.
+- **Task 9: Implement Storage of Loss Profiles** (Completed)
+  - Added `store_loss_profiles` function to `analysis_script.py`.
+  - This function takes a dictionary mapping model identifiers to their loss profiles and saves each to a separate JSON file in `analysis/results/`.
+  - It sanitizes model identifiers for safe filenames and converts tensor data to lists before JSON serialization.
+  - Tested by running the script; loss profiles for a test identifier were successfully saved to a JSON file.
+- **Task 10: Develop Plotting Utility for Loss Profiles** (Completed)
+  - Added `plot_average_loss_profile` function to `analysis_script.py`.
+  - This function loads loss profiles from a specified JSON file, calculates the average loss per token position, and generates a plot of average loss vs. token position.
+  - The plot is saved as a PNG file in the `analysis/plots/` directory, with a filename derived from the model identifier.
+  - Tested by running the script; it successfully loaded the previously saved test loss profiles, generated, and saved the plot image.
+
+## Next Task
+- Determine next task from Taskmaster. 

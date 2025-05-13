@@ -226,12 +226,15 @@ cat "$COMMANDS_FILE" | parallel \
     --joblog "${LOCAL_OVERALL_RUN_DIR}/parallel_master_joblog.txt" \
     --eta \
     --tagstring "[Job {#}/{=N=}, GPU {= (\$slot-1) % \$ENV{NUM_GPUS} =}]" \
-    'GPUNUM=$(( (PARALLEL_JOB_SLOT - 1) % $NUM_GPUS )); \
+    'echo "Debug: Inner shell sees NUM_GPUS as: [$NUM_GPUS]"; \
+     echo "Debug: Inner shell sees PARALLEL_JOB_SLOT as: [$PARALLEL_JOB_SLOT]"; \
+     GPUNUM=$(( (PARALLEL_JOB_SLOT - 1) % $NUM_GPUS )); \
+     echo "Debug: Calculated GPUNUM as: [$GPUNUM]"; \
      K_SEED_INFO=$(echo {} | grep -o -E "k [0-9]+.*seed [0-9]+" | sed "s/k //g" | sed "s/ seed /_s/g"); \
      LOG_FILENAME="run_${K_SEED_INFO}_gpu${GPUNUM}_job{#}.log"; \
      LOG_FILEPATH="${PARALLEL_JOB_LOG_DIR}/${LOG_FILENAME}"; \
-     echo "Starting job {#} on GPU ${GPUNUM}: {}"; \
-     echo "Output log: ${LOG_FILEPATH}"; \
+     echo "Starting job {#} (K/S: ${K_SEED_INFO}) on GPU ${GPUNUM}: $(echo {} | cut -c 1-100)...\"; \
+     echo "Output log: ${LOG_FILEPATH}\"; \
      (export CUDA_VISIBLE_DEVICES=${GPUNUM}; {}) > "${LOG_FILEPATH}" 2>&1'
 
 # Explanation of the parallel command:

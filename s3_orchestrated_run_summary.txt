@@ -1,0 +1,770 @@
+S3 Orchestrated Run Summary
+Base Path: s3://obelisk-simplex/non-ergodic-arxiv/training_runs/
+=============================================================
+
+Orchestrator Container: run_2025-05-11_01-36-02/
+------------------------------------------------
+  Run: k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 1, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 1, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 1, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 3, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 3, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 3, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+  -------------------------------
+  Run: k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 5, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed1_lr0.0003_bs16_k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k5_seed1_lr0.0003_bs16_k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - final_model/
+  -------------------------------
+  Run: k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02
+    Parsed Params: {'k': 5, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-36-02', 'suffix': 'final_multi_gpu', 'original_name': 'k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-36-02/k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed2_lr0.0003_bs16_k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02.log
+      - k5_seed2_lr0.0003_bs16_k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-36-02_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+  -------------------------------
+
+Orchestrator Container: run_2025-05-11_01-50-55/
+------------------------------------------------
+  Run: k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 1, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 1, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 1, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 3, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 3, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 3, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 5, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed1_lr0.0003_bs16_k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k5_seed1_lr0.0003_bs16_k5_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55
+    Parsed Params: {'k': 5, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_01-50-55', 'suffix': 'final_multi_gpu', 'original_name': 'k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_01-50-55/k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed2_lr0.0003_bs16_k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55.log
+      - k5_seed2_lr0.0003_bs16_k5_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_01-50-55_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+
+Orchestrator Container: run_2025-05-11_02-21-17/
+------------------------------------------------
+  Run: k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17
+    Parsed Params: {'k': 1, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_02-21-17', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_02-21-17/k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17.log
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17
+    Parsed Params: {'k': 1, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_02-21-17', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_02-21-17/k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17.log
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17
+    Parsed Params: {'k': 1, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_02-21-17', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_02-21-17/k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17.log
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_02-21-17_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+
+Orchestrator Container: run_2025-05-11_03-48-12/
+------------------------------------------------
+  Run: k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 1, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed0_lr0.0003_bs16_k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k1_seed0_lr0.0003_bs16_k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 1, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 1, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 1, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 3, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k3_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed0_lr0.0003_bs16_k3_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k3_seed0_lr0.0003_bs16_k3_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 3, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 3, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12
+    Parsed Params: {'k': 3, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-48-12', 'suffix': 'final_multi_gpu', 'original_name': 'k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-48-12/k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12.log
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-48-12_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+
+Orchestrator Container: run_2025-05-11_03-51-13/
+------------------------------------------------
+  Run: k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13
+    Parsed Params: {'k': 1, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-51-13', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-51-13/k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed0_lr0.0003_bs16_k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13.log
+      - k1_seed0_lr0.0003_bs16_k1_s0_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13
+    Parsed Params: {'k': 1, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-51-13', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-51-13/k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13.log
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13
+    Parsed Params: {'k': 1, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-51-13', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-51-13/k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13.log
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13
+    Parsed Params: {'k': 1, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_03-51-13', 'suffix': 'final_multi_gpu', 'original_name': 'k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_03-51-13/k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13.log
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_multi_gpu_2025-05-11_03-51-13_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+
+Orchestrator Container: run_2025-05-11_05-33-44_final_python_orch/
+------------------------------------------------------------------
+  Run: k11_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 11, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k11_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k11_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k11_seed1_lr0.0003_bs16_k11_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k11_seed1_lr0.0003_bs16_k11_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k11_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 11, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k11_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k11_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k11_seed2_lr0.0003_bs16_k11_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k11_seed2_lr0.0003_bs16_k11_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 1, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k1_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k1_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed0_lr0.0003_bs16_k1_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k1_seed0_lr0.0003_bs16_k1_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 1, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k1_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k1_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k1_seed1_lr0.0003_bs16_k1_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 1, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k1_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k1_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k1_seed2_lr0.0003_bs16_k1_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k1_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 1, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k1_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k1_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k1_seed3_lr0.0003_bs16_k1_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 3, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k3_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k3_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed0_lr0.0003_bs16_k3_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k3_seed0_lr0.0003_bs16_k3_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 3, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k3_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k3_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k3_seed1_lr0.0003_bs16_k3_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 3, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k3_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k3_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k3_seed2_lr0.0003_bs16_k3_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k3_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 3, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k3_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k3_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k3_seed3_lr0.0003_bs16_k3_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k5_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 5, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k5_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k5_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed0_lr0.0003_bs16_k5_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k5_seed0_lr0.0003_bs16_k5_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k5_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 5, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k5_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k5_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed1_lr0.0003_bs16_k5_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k5_seed1_lr0.0003_bs16_k5_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k5_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 5, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k5_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k5_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed2_lr0.0003_bs16_k5_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k5_seed2_lr0.0003_bs16_k5_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k5_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 5, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k5_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k5_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k5_seed3_lr0.0003_bs16_k5_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k5_seed3_lr0.0003_bs16_k5_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k8_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 8, 'seed': 0, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k8_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k8_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k8_seed0_lr0.0003_bs16_k8_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k8_seed0_lr0.0003_bs16_k8_s0_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k8_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 8, 'seed': 1, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k8_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k8_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k8_seed1_lr0.0003_bs16_k8_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k8_seed1_lr0.0003_bs16_k8_s1_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k8_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 8, 'seed': 2, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k8_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k8_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k8_seed2_lr0.0003_bs16_k8_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k8_seed2_lr0.0003_bs16_k8_s2_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+  Run: k8_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44
+    Parsed Params: {'k': 8, 'seed': 3, 'lr': '3e-4', 'bs': 16, 'timestamp': '2025-05-11_05-33-44', 'suffix': 'final_python_orch', 'original_name': 'k8_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44'}
+    S3 Path: non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/k8_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44/
+    Files:
+      - in_context_loss_profiles.json
+      - in_context_loss_profiles.png
+      - k8_seed3_lr0.0003_bs16_k8_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44.log
+      - k8_seed3_lr0.0003_bs16_k8_s3_lr3e-4_bs16_final_python_orch_2025-05-11_05-33-44_args.json
+    Subdirectories:
+      - best_model/
+      - final_model/
+      - initial_model/
+      - loss_checkpoints/
+      - step_checkpoints/
+      - top_ema_val_checkpoints/
+  -------------------------------
+
+=============================================================
+Summary generation complete.

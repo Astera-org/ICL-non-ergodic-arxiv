@@ -25,7 +25,55 @@ wandb/
 .vscode/
 .idea/
 .cursor/
+.venv/
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Added by Claude Task Master
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+# Dependency directories
+node_modules/
+# Environment variables
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# OS specific
+# Task files
+tasks.json
+tasks/ 
+
+# Virtual environments
+.venv/
+.venv
+
+# Image files
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.svg
+*.webp
+
+
+# Data directories
+analysis/downloaded_data/
+analysis/downloaded_data_final/
+downloaded_model/
+downloaded_models/
+position_loss_results/

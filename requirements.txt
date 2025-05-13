@@ -9,6 +9,7 @@ wandb>=0.15.0
 boto3>=1.28.0
 python-dotenv>=1.0.0
 matplotlib
+tabulate
 
 # For fetch_arxiv.py & potentially others, consider adding:
 # requests
