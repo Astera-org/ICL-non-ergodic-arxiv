@@ -1,43 +1,87 @@
-Project Title: Focused In-Context Loss Analysis for Single Orchestrator Run
+# ArXiv Ergodic Component Scaling Experiments - Product Requirements Document
 
-Objective:
-Perform an in-context learning analysis by calculating cross-entropy loss at each token position on test data. This analysis will focus exclusively on models from the individual training runs contained within the S3 orchestrator run: `run_2025-05-11_05-33-44_final_python_orch`. This is research code, aiming for clarity and ease of analysis over production-level optimization.
+## Project Overview
 
-Key Requirements:
+This research project aims to investigate how a causal language model's in-context token-level cross entropy (XE) scales with the number of statistically independent ergodic components when total training tokens are held constant. The project involves training language models on different combinations of arXiv sub-categories (components) while keeping the total token count fixed.
 
-1.  Targeted Data Handling:
-    *   The project scope is limited to the S3 orchestrator run: `s3://obelisk-simplex/non-ergodic-arxiv/training_runs/run_2025-05-11_05-33-44_final_python_orch/`.
-    *   A core `analysis_script.py` will be developed to handle data and model interactions. This script will be structured with VS Code cells (# %%) to allow for step-by-step execution and immediate verification of outputs.
-    *   The script will include a function (e.g., `list_s3_training_runs`) to list all individual training run subfolders (e.g., `k1_s0_lr.../`, `k11_s1_lr.../`) directly within the specified orchestrator folder. Each step's output should be easily verifiable in the terminal.
-    *   Another function (e.g., `get_train_run_metadata`) will identify and collate S3 paths for essential files from each training run. These paths will be stored in a structured manner.
-    *   Essential files include:
-        *   Model files (e.g., `config.json`, `model.safetensors` or `pytorch_model.bin`) from `best_model/` (or preferred location if `best_model/` isn't standard or present).
-        *   Experiment arguments file (e.g., `_args.json`).
-        *   Checkpoint files (format to be determined by inspection).
-    *   A function (e.g., `get_train_run_model_files`) will handle on-demand downloading of these files using the collated S3 paths. Files will be organized locally, maintaining a structure like: `analysis/downloaded_data/run_2025-05-11_05-33-44_final_python_orch/k1_s0_lr.../`.
+## Research Questions
 
-2.  Model Loading and Preparation:
-    *   The `analysis_script.py` will contain a function (e.g., `load_model`) to load a Hugging Face transformer model using the downloaded configuration and model weights for a specified individual run (best model or a specific checkpoint).
-    *   A function (e.g., `create_test_dataloader`) will adapt `random_window_dataset.py` (or a similar method) to prepare a test dataset.
+1. How does model performance (measured by cross-entropy) change as we increase the number of independent ergodic components in the training data?
+2. What is the relationship between model size, number of components, and performance?
+3. Can we quantify how diversifying training data across more domains affects generalization capabilities?
 
-3.  In-Context Loss Evaluation:
-    *   The `analysis_script.py` will feature a function (e.g., `get_in_context_loss`) that, for each loaded model:
-        *   Iterates through sequences from the test dataset.
-        *   Calculates and stores the cross-entropy loss for each token, given its preceding context.
-        *   Primary output: loss profiles (loss per token position).
-    *   The implementation of loss calculation and subsequent data handling can draw inspiration from `tests/test_pretrained_in_context_loss.py`.
+## Key Components
 
-4.  Results Output and Visualization:
-    *   Store the calculated in-context loss profiles in a structured format (e.g., a JSON file for each evaluated model, or an aggregated collection).
-    *   Develop a utility to generate plots visualizing these loss profiles, for example, average loss versus token position. The plotting logic in `tests/test_pretrained_in_context_loss.py` serves as a good reference.
+### 1. Dataset Processing
 
-Assumptions:
-*   AWS S3 access is configured.
-*   The models of interest are standard Hugging Face transformer architectures. 
+- Use the `ccdv/arxiv-classification` dataset (train/val/test splits)
+- Select arXiv sub-categories to serve as independent components:
+  - Focus on: cs.CV, cs.AI, cs.SY, cs.CE, cs.PL, cs.IT, cs.DS, cs.NE, math.AC, math.GR, math.ST
+  - Analyze dataset to identify the five categories with most data for primary experiments
+  - Structure the scaling experiment systematically (e.g., train on smallest category first, then smallest/2 + second-smallest/2, etc.), Make sure each training run goes through the same number of tokens!
+- Implement tokenization with an appropriate tokenizer
+- Design storage solution for efficient access during training
+- Create a dynamic window loader that selects 100-token windows randomly from the training set. A single epoch should go through the entire training set once. And we want to go have 3-5 epochs (to be deterimed).
 
-Project Structure and Development Approach:
-*   All project-related code, scripts, and outputs should be organized within a root folder named `analysis/`.
-*   The primary analysis tool will be `analysis/analysis_script.py`. This script will be composed of clear, modular functions, with each major step encapsulated in a VS Code cell (# %%) for iterative development, execution, and immediate output verification.
-*   Other supporting Python code should be structured into modular and clear files (i.e., "nice function files") within the `analysis/` directory as needed.
-*   The implementation should prioritize simplicity, straightforwardness, and verifiability at each step.
-*   The overall nature of the project is for research purposes, not production deployment. 
+### 2. Experimental Design
+
+- Determine optimal model size for experiments (balancing computational constraints with research needs)
+- Define scaling values (number of components, tokens per component, etc.)
+- Establish total token budget to be held constant across all experiments
+- Design experiment progression logic (how to combine components, allocation of tokens, etc.)
+- Set training parameters (learning rate, batch size, number of epochs [3-5])
+
+### 3. Model Development
+
+- Implement/adapt a causal language model architecture
+- Support variable-sized training on different component combinations
+- Ensure reproducible training setup (fixed seeds, controlled environments)
+- Implement appropriate logging and checkpointing
+
+### 4. Evaluation Framework
+
+- Measure in-context token-level cross entropy across different component combinations
+- Design evaluation protocols for each experimental condition
+- Create visualization tools for scaling relationships
+- Implement statistical analysis for comparing results across conditions
+
+### 5. Infrastructure
+
+- Set up computation environment with appropriate GPU resources
+- Implement efficient data loading pipelines
+- Design experiment tracking and management system
+- Ensure reproducibility of experiments
+
+## Success Metrics
+
+- Complete set of experiments across different component combinations
+- Clear quantification of scaling relationship between number of components and cross entropy
+- Statistical validation of observed trends
+- High-quality visualizations of scaling relationships
+- Reproducible experimental setup and results
+
+## Project Phases
+
+1. **Preparation**: Dataset analysis, experimental design finalization, and infrastructure setup
+2. **Implementation**: Develop data processing pipeline, model adaptations, and evaluation framework
+3. **Experimentation**: Run training across different component combinations
+4. **Analysis**: Process results, create visualizations, perform statistical analyses
+5. **Documentation**: Write up findings, prepare research artifacts
+
+## Technical Requirements
+
+- PyTorch or similar framework for model implementation
+- HuggingFace datasets and tokenizers for data processing
+- Experiment tracking (e.g., Weights & Biases, MLflow)
+- High-performance computing resources (GPUs)
+- Data visualization libraries
+- Statistical analysis tools
+
+## Deliverables
+
+- Complete codebase for experiments
+- Processed datasets ready for model training
+- Trained model checkpoints
+- Evaluation results and analysis
+- Visualization of scaling relationships
+- Technical report or research paper 
