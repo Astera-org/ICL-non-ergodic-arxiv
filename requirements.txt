@@ -1,0 +1,13 @@
+transformers
+datasets
+torch
+numpy
+pandas
+matplotlib
+hydra-core
+mlflow
+wandb
+tqdm 
+h5py 
+PyYAML 
+tokenizers 

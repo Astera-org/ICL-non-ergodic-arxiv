@@ -1,0 +1,5 @@
+k_value: 1
+active_categories:
+- cs.DS
+tokens_per_category: 50176000
+experiment_id: K1_csDS

@@ -1,0 +1,33 @@
+# Hydra Configuration for MicroDecoderModel
+# File: configs/model/micro_decoder.yaml
+
+_target_: src.models.micro_decoder_model.MicroDecoderModel
+name: "MicroDecoderModel" # Added model name
+
+# Path to the custom tokenizer, relative to the project root
+# This is needed by the load_tokenizer_from_config utility
+custom_tokenizer_path: "models/custom_tokenizer/custom_bpe_tokenizer.json"
+
+# Parameters for the MicroDecoderConfig object and subsequently the MicroDecoderModel
+# These will be part of the `model_cfg.architecture` argument in the loading function.
+architecture:
+  # vocab_size: Will be set dynamically at runtime from the tokenizer
+  max_position_embeddings: 100  # Max sequence length
+  d_model: 256                  # Hidden size / embedding dimension (n_embd for GPT2 components)
+  n_layers: 6                   # Number of decoder blocks (n_layer for GPT2 components)
+  n_heads: 4                    # Number of attention heads (n_head for GPT2 components)
+  d_ff: 1024                    # Feed-forward inner dimension (n_inner for GPT2MLP)
+  
+  hidden_act: "gelu"            # Activation function (activation_function for GPT2 components)
+  
+  # Dropout probabilities
+  hidden_dropout_prob: 0.1      # General dropout (resid_pdrop for GPT2Attention/MLP, embd_pdrop for embeddings)
+  attention_probs_dropout_prob: 0.1 # Attention-specific dropout (attn_pdrop for GPT2Attention)
+  
+  tie_word_embeddings: True     # Share weights between token embeddings and LM head
+  layer_norm_eps: 1.0e-5        # Epsilon for LayerNorm layers
+  initializer_range: 0.02       # Standard deviation for weight initialization
+  # pad_token_id: Will be set dynamically at runtime from the tokenizer if available
+
+# Other model-related settings can be added here if needed by the loading function or model itself.
+# For example, if a specific pre-trained checkpoint should be loaded for some parts (not applicable here as it's from scratch). 

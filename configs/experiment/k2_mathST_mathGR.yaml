@@ -1,0 +1,6 @@
+k_value: 2
+active_categories:
+- math.ST
+- math.GR
+tokens_per_category: 25088000
+experiment_id: K2_mathGR_mathST

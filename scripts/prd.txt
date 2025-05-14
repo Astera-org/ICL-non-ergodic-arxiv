@@ -1,87 +1,109 @@
-# ArXiv Ergodic Component Scaling Experiments - Product Requirements Document
+# Product Requirements Document: ArXiv Ergodic-Component Scaling Experiments
 
 ## Project Overview
 
-This research project aims to investigate how a causal language model's in-context token-level cross entropy (XE) scales with the number of statistically independent ergodic components when total training tokens are held constant. The project involves training language models on different combinations of arXiv sub-categories (components) while keeping the total token count fixed.
+This research project aims to measure how a causal language model's in-context token-level cross entropy (XE) scales with the number (K) of statistically independent ergodic components when total training tokens are held constant. As components are added, the number of tokens per component will be reduced to maintain a constant total token count.
 
-## Research Questions
+## Research Objectives
 
-1. How does model performance (measured by cross-entropy) change as we increase the number of independent ergodic components in the training data?
-2. What is the relationship between model size, number of components, and performance?
-3. Can we quantify how diversifying training data across more domains affects generalization capabilities?
-
-## Key Components
-
-### 1. Dataset Processing
-
-- Use the `ccdv/arxiv-classification` dataset (train/val/test splits)
-- Select arXiv sub-categories to serve as independent components:
-  - Focus on: cs.CV, cs.AI, cs.SY, cs.CE, cs.PL, cs.IT, cs.DS, cs.NE, math.AC, math.GR, math.ST
-  - Analyze dataset to identify the five categories with most data for primary experiments
-  - Structure the scaling experiment systematically (e.g., train on smallest category first, then smallest/2 + second-smallest/2, etc.), Make sure each training run goes through the same number of tokens!
-- Implement tokenization with an appropriate tokenizer
-- Design storage solution for efficient access during training
-- Create a dynamic window loader that selects 100-token windows randomly from the training set. A single epoch should go through the entire training set once. And we want to go have 3-5 epochs (to be deterimed).
-
-### 2. Experimental Design
-
-- Determine optimal model size for experiments (balancing computational constraints with research needs)
-- Define scaling values (number of components, tokens per component, etc.)
-- Establish total token budget to be held constant across all experiments
-- Design experiment progression logic (how to combine components, allocation of tokens, etc.)
-- Set training parameters (learning rate, batch size, number of epochs [3-5])
-
-### 3. Model Development
-
-- Implement/adapt a causal language model architecture
-- Support variable-sized training on different component combinations
-- Ensure reproducible training setup (fixed seeds, controlled environments)
-- Implement appropriate logging and checkpointing
-
-### 4. Evaluation Framework
-
-- Measure in-context token-level cross entropy across different component combinations
-- Design evaluation protocols for each experimental condition
-- Create visualization tools for scaling relationships
-- Implement statistical analysis for comparing results across conditions
-
-### 5. Infrastructure
-
-- Set up computation environment with appropriate GPU resources
-- Implement efficient data loading pipelines
-- Design experiment tracking and management system
-- Ensure reproducibility of experiments
-
-## Success Metrics
-
-- Complete set of experiments across different component combinations
-- Clear quantification of scaling relationship between number of components and cross entropy
-- Statistical validation of observed trends
-- High-quality visualizations of scaling relationships
-- Reproducible experimental setup and results
-
-## Project Phases
-
-1. **Preparation**: Dataset analysis, experimental design finalization, and infrastructure setup
-2. **Implementation**: Develop data processing pipeline, model adaptations, and evaluation framework
-3. **Experimentation**: Run training across different component combinations
-4. **Analysis**: Process results, create visualizations, perform statistical analyses
-5. **Documentation**: Write up findings, prepare research artifacts
+1. Determine how language model performance scales with the number of distinct ergodic components in the training data
+2. Establish a methodology for controlling the ergodic component distribution in training data
+3. Create reproducible benchmarks for component scaling experiments
+4. Produce empirical results that contribute to the understanding of language model training dynamics
 
 ## Technical Requirements
 
-- PyTorch or similar framework for model implementation
-- HuggingFace datasets and tokenizers for data processing
-- Experiment tracking (e.g., Weights & Biases, MLflow)
-- High-performance computing resources (GPUs)
-- Data visualization libraries
-- Statistical analysis tools
+### Dataset Requirements
+
+1. Use arXiv subcategories as ergodic components, specifically: `cs.CV, cs.AI, cs.SY, cs.CE, cs.PL, cs.IT, cs.DS, cs.NE, math.AC, math.GR, math.ST`
+2. Implement a pipeline to:
+   - Download and cache the `ccdv/arxiv-classification` dataset (train/val/test splits)
+   - Tokenize all documents using a consistent tokenizer
+   - Store processed data in an efficient format
+   - Create a dynamic window loader that produces 100-token randomly selected windows
+3. Analyze the dataset to determine optimal scaling values for components
+4. Structure experiments to train on varying amounts of data from each component while keeping total token count constant
+
+### Model Requirements
+
+1. Select appropriate model sizes for experiments
+2. Implement training infrastructure to support controlled component distribution
+3. Track and evaluate in-context token-level cross entropy across different component settings
+4. Ensure fair comparison between different component distributions
+
+### Implementation Details
+
+1. Use the HuggingFace ecosystem (transformers, datasets) for model and data handling
+2. Process the dataset as follows:
+   - Filter for the top five arXiv categories by data volume
+   - Apply consistent tokenization (EleutherAI/pythia-70m tokenizer)
+   - Chunk documents into manageable token sequences
+   - Create balanced training datasets with controlled component ratios
+3. Implement a training loop that:
+   - Maintains epoch consistency (3-5 epochs, to be determined)
+   - Ensures each training run sees the same total number of tokens
+   - Varies only in the distribution of components
+4. Track metrics across training to measure the effect of component scaling
+
+### Experimental Structure
+
+1. Identify the top five arXiv categories with the most data in the training set
+2. Structure experiments with increasing number of components (K) while keeping total tokens constant:
+   - Experiment 1 (K=1): Train on 100% of the smallest category's data
+   - Experiment 2 (K=2): Train on 50% of smallest category + 50% from second category (truncated as needed)
+   - Experiment 3 (K=3): Train on 33.3% from each of three categories (truncated as needed)
+   - Continue this pattern for K=4 and K=5
+3. For each experiment:
+   - Total token count remains identical
+   - Each component contributes exactly 1/K of the tokens
+   - If a category has insufficient tokens, use all available and adjust other components
+4. This design isolates the effect of increasing ergodic components while controlling for total training tokens
+
+### Performance Optimizations
+
+1. Use Arrow format with memory mapping (mmap) for efficient data access:
+   - The operating system will handle paging data as needed
+   - Avoids paying the upfront cost of loading large datasets (e.g., 2GB Parquet files)
+2. Use 100-token fixed length sequences to optimize batch formation:
+   - Dataloader can form batches with a single `.view()` operation instead of Python loops
+   - Significantly reduces preprocessing overhead during training
+3. Include labels directly in the dataset:
+   - Eliminates need for extra join operations at training time
+   - Reduces computational overhead
+4. For maximum performance (optional):
+   - Store input_ids in numpy uint16 memory-mapped arrays (since vocabulary size < 65,535)
+   - Implement a simple PyTorch IterableDataset that returns `.view(-1,100)` windows
+   - This approach minimizes overhead while maintaining efficient access patterns
+5. Focus on these optimization techniques as they provide the optimal performance/complexity tradeoff for a dataset of this size (~30k papers)
+
+## Evaluation Criteria
+
+1. Primary metric: Token-level cross entropy (XE) on held-out data
+2. Secondary metrics:
+   - Component-specific performance (XE per component)
+   - Training stability across different component distributions
+   - Convergence characteristics
 
 ## Deliverables
 
-- Complete codebase for experiments
-- Processed datasets ready for model training
-- Trained model checkpoints
-- Evaluation results and analysis
-- Visualization of scaling relationships
-- Technical report or research paper 
+1. Complete dataset processing pipeline
+2. Training infrastructure for component scaling experiments
+3. Experimental results documenting the relationship between ergodic component count and model performance
+4. Analysis of results with insights for language model training practices
+5. Code repository with reproducible experiments
+
+## Timeline and Resources
+
+1. Phase 1: Dataset preparation and analysis (determine optimal component selection and scaling values)
+2. Phase 2: Training infrastructure development
+3. Phase 3: Run experiments with varied component distributions
+4. Phase 4: Analysis and documentation of results
+
+## Technical Considerations
+
+1. Computing resources must be sufficient to train selected model sizes
+2. Storage for processed dataset components
+3. Consistent environment setup for reproducibility
+4. Tracking and visualization tools for experimental results
+
+This PRD will guide the development of a research project investigating the fundamental scaling properties of language models with respect to ergodic components in training data. 

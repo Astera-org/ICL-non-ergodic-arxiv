@@ -1,0 +1,7 @@
+# Placeholder for default experiment configuration
+# You can copy one of the generated k*.yaml files here or define a specific default.
+k_value: 1
+active_categories:
+  - "cs.DS" # Example default
+tokens_per_category: 50176000 # Example default
+experiment_id: "default_k1_csDS" 

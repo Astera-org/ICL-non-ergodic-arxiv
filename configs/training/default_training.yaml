@@ -1,0 +1,47 @@
+# configs/training/default_training.yaml
+# Defines default training parameters.
+# These can be overridden via command line or experiment-specific configs.
+
+epochs: 20
+batch_size: 32  # Per-device physical batch size
+effective_batch_size: 512 # Desired effective batch size after gradient accumulation
+# gradient_accumulation_steps will be calculated in the script based on batch_size and effective_batch_size
+gradient_accumulation_steps: 1 # Placeholder, will be calculated in main_hydra_app.py 
+learning_rate: 5e-5 # This is a common default, actual LR comes from optimizer config
+optimizer: "AdamW"
+# scheduler: "CosineAnnealingLR"
+log_interval: 100 # Log every N global steps (after accumulation)
+max_grad_norm: 1.0 # Maximum norm for gradient clipping
+# num_workers: 0 # For DataLoader, 0 means main process. Can increase for parallel loading.
+# pin_memory: False # For DataLoader, can set to True if using GPU for potentially faster transfers.
+
+# Mixed Precision Training
+mixed_precision_enabled: false # Enable or disable mixed precision
+mixed_precision_dtype: "bf16"  # "fp16" or "bf16" (bf16 preferred if supported, fp16 more common)
+
+# Checkpointing configuration
+checkpoint_dir: null # If null, defaults to <hydra_run_dir>/checkpoints. Can be an absolute or relative path.
+resume_from_checkpoint: null # Path to a specific local checkpoint file to resume from, or a W&B artifact URI (e.g., "entity/project/artifact_name:alias")
+save_checkpoint_interval_steps: 1000 # Save a checkpoint every N global steps. Set to 0 or negative to disable step-based checkpointing.
+save_best_model_metric: "val_loss" # Metric name from validation logs to monitor for saving the "best_model.pt". Set to null to disable.
+save_best_model_mode: "min" # "min" or "max". How to compare the save_best_model_metric.
+
+# Batch size for the initial dataset tokenization step
+# This is separate from training/evaluation batch_size
+tokenization_batch_size: 1000 # Can be larger as it's less memory intensive than training
+
+# Max global steps for training, -1 for no limit (useful for quick tests)
+max_global_steps: -1
+
+# Validation settings
+perform_validation: True
+validation_interval_epochs: 1 # Perform validation every N epochs
+validation_batch_size: ${training.batch_size} # Can be overridden
+
+# Early stopping settings
+early_stopping_enabled: True
+early_stopping_patience: 10 # Number of validation checks without improvement before stopping
+early_stopping_metric: "val_loss" # Metric to monitor ("val_loss" or "val_perplexity")
+early_stopping_min_delta: 0.001 # Minimum change in monitored quantity to qualify as an improvement
+
+# Add other training related parameters here, e.g., scheduler settings, gradient clipping 

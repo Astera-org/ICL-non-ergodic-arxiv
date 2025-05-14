@@ -1,0 +1,9 @@
+k_value: 5
+active_categories:
+- cs.DS
+- math.ST
+- math.GR
+- cs.IT
+- cs.PL
+tokens_per_category: 10035200
+experiment_id: K5_csDS_csIT_csPL_mathGR_mathST

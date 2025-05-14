@@ -1,0 +1,52 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - dataset: default_dataset  # Example: refers to configs/dataset/default_dataset.yaml
+  - model: default_model      # Example: refers to configs/model/default_model.yaml
+  - training: default_training # Example: refers to configs/training/default_training.yaml
+  - optimizer: adamw          # Added: refers to configs/optimizer/adamw.yaml
+  - scheduler: cosine_warmup  # Added: refers to configs/scheduler/cosine_warmup.yaml
+  - experiment: default_experiment # Added for experiment configurations
+  # - override hydra/job_logging: colorlog # Example, if you have custom logging
+  # - override hydra/hydra_logging: colorlog # Example
+
+# General project settings (can be overridden by specific configs)
+project_name: "ICL-non-ergodic-arxiv"
+
+# Logging configuration
+logging:
+  level: "INFO" # Default logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  log_file: "logs/main_app.log" # Default log file path (can be relative or absolute)
+  # You can add more specific logger configurations here if needed, e.g., for different modules
+
+# Root directory for outputs, Hydra will automatically create subdirectories based on date/time
+hydra:
+  run:
+    dir: outputs/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/multiruns/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# General experiment parameters
+seed: 42
+
+# Example: Placeholder for dataset-specific configurations
+# These would typically be in their own files like configs/dataset/my_dataset.yaml
+# and selected via command line or by changing the defaults above.
+
+# Example: Placeholder for model-specific configurations
+
+# Example: Placeholder for training-specific configurations
+
+# Experiment Tracking (Weights & Biases)
+wandb:
+  project: "ICL-non-ergodic-arxiv-experiments" # Default project name, override as needed
+  entity: "adamimos" # Changed to your personal W&B username
+  run_name: "${now:%Y-%m-%d_%H-%M-%S}" # Simplified to just timestamp
+  tags: ["hydra_run"]
+  log_config: True # Log the hydra config to W&B
+  log_code: True # Log the current state of the git repository
+  log_model: false # Can be true, "all", or false
+  enabled: true
+  # notes: "" # Add any notes for this run 

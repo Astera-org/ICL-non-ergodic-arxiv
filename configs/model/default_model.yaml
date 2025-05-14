@@ -1,0 +1,33 @@
+# configs/model/default_model.yaml
+
+# This is the configuration for the default model.
+# It instantiates a MicroDecoderModel with a simpler architecture.
+
+_target_: src.models.micro_decoder_model.MicroDecoderModel
+name: "DefaultModel"
+
+# Path to the custom tokenizer, relative to the project root.
+# This is required by the model loading utilities and the model itself.
+custom_tokenizer_path: "models/custom_tokenizer/custom_bpe_tokenizer.json"
+
+# Architecture parameters for the MicroDecoderModel
+architecture:
+  max_position_embeddings: 100  # Max sequence length, should match data chunk length
+  d_model: 128                  # Hidden size / embedding dimension
+  n_layers: 2                   # Number of decoder blocks
+  n_heads: 2                    # Number of attention heads
+  d_ff: 512                     # Feed-forward inner dimension
+  
+  hidden_act: "gelu"            # Activation function
+  
+  # Dropout probabilities
+  hidden_dropout_prob: 0.1      # General dropout
+  attention_probs_dropout_prob: 0.1 # Attention-specific dropout
+  
+  tie_word_embeddings: True     # Share weights between token embeddings and LM head
+  layer_norm_eps: 1.0e-5        # Epsilon for LayerNorm layers
+  initializer_range: 0.02       # Standard deviation for weight initialization
+  # vocab_size and pad_token_id will be set dynamically from the tokenizer at runtime.
+
+# Any other model-specific parameters required by MicroDecoderModel or its loading logic
+# can be added here.

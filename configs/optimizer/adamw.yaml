@@ -1,0 +1,11 @@
+# Hydra Configuration for AdamW Optimizer
+# File: configs/optimizer/adamw.yaml
+
+_target_: torch.optim.AdamW
+
+lr: 5.0e-4          # Learning Rate: 0.0005
+betas: [0.9, 0.95]  # AdamW beta1 and beta2
+eps: 1.0e-8          # AdamW epsilon for numerical stability
+weight_decay: 0.1     # Weight decay (L2 penalty)
+# amsgrad: false       # Uncomment if you want to try AMSGrad variant (typically not needed for transformers)
+# maximize: false      # Set to true if your loss function is an accuracy/reward to be maximized 

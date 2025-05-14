@@ -1,0 +1,7 @@
+k_value: 3
+active_categories:
+- cs.DS
+- cs.IT
+- cs.PL
+tokens_per_category: 16725333
+experiment_id: K3_csDS_csIT_csPL

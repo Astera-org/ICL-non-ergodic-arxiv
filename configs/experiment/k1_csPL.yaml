@@ -1,0 +1,5 @@
+k_value: 1
+active_categories:
+- cs.PL
+tokens_per_category: 50176000
+experiment_id: K1_csPL
